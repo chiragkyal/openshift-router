@@ -137,6 +137,13 @@ func (m *Manager) GetSecret(namespace, routeName string) (*v1.Secret, error) {
 	return obj, nil
 }
 
+// IsRouteRegistered returns true if route is registered, false otherwise
+func (m *Manager) IsRouteRegistered(namespace, routeName string) bool {
+	key := generateKey(namespace, routeName)
+	_, exists := m.registeredHandlers[key]
+	return exists
+}
+
 // generateKey creates a unique identifier for a route
 func generateKey(namespace, route string) string {
 	return fmt.Sprintf("%s/%s", namespace, route)

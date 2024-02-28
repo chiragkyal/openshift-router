@@ -36,36 +36,29 @@ func (c *RouteSecretController) HandleRoute(eventType watch.EventType, route *ro
 	switch eventType {
 	case watch.Added:
 		if hasExternalCertificate(route) {
-			err := c.registerRouteWithSecretManager(route)
-			if err != nil {
+			if err := c.registerRouteWithSecretManager(route); err != nil {
 				klog.Error("failed to register route")
 				return err
 			}
 		}
 	case watch.Modified:
-		// TODO: Since we are not sure
-		// 1. whether the old route was using externalCertificate or not [if it was using secret informer must be removed]
-		// 2. whether the externalCertificate (secretName) was updated or not
-
-		// always remove the old watch [without checking hasExternalCertificate()], and create a new secret watch
-		// even if the referenced secretName is same
-
-		// need to ignore error for reason 1
-		// Solution : add new method : IsRouteRegistered()
-		_ = c.secretManager.UnregisterRoute(route.Namespace, route.Name)
-
+		// remove old watch
+		if c.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
+			if err := c.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
+				klog.Error(err)
+				return err
+			}
+		}
+		// create new watch
 		if hasExternalCertificate(route) {
-			err := c.registerRouteWithSecretManager(route)
-			if err != nil {
+			if err := c.registerRouteWithSecretManager(route); err != nil {
 				klog.Error("failed to register route")
 				return err
 			}
 		}
-
 	case watch.Deleted:
-		if hasExternalCertificate(route) { // instead use IsRouteRegistered()
-			err := c.secretManager.UnregisterRoute(route.Namespace, route.Name)
-			if err != nil {
+		if c.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
+			if err := c.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
 				klog.Error(err)
 				return err
 			}
