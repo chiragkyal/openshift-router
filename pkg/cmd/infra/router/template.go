@@ -29,7 +29,6 @@ import (
 	authoptions "k8s.io/apiserver/pkg/server/options"
 	authenticationclient "k8s.io/client-go/kubernetes/typed/authentication/v1"
 	authorizationclient "k8s.io/client-go/kubernetes/typed/authorization/v1"
-	"k8s.io/client-go/util/workqueue"
 
 	routev1 "github.com/openshift/api/route/v1"
 	projectclient "github.com/openshift/client-go/project/clientset/versioned"
@@ -748,8 +747,8 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 		return err
 	}
 
-	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
-	secretManager := secretmanager.NewManager(kc, queue)
+	// queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
+	secretManager := secretmanager.NewManager(kc, nil /*queue*/)
 
 	pluginCfg := templateplugin.TemplatePluginConfig{
 		WorkingDir:                    o.WorkingDir,
@@ -777,6 +776,7 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 		HTTPHeaderNameCaseAdjustments: o.HTTPHeaderNameCaseAdjustments,
 		HTTPResponseHeaders:           o.HTTPResponseHeaders,
 		HTTPRequestHeaders:            o.HTTPRequestHeaders,
+		SecretManager:                 secretManager,
 	}
 
 	svcFetcher := templateplugin.NewListWatchServiceLookup(kc.CoreV1(), o.ResyncInterval, o.Namespace)
@@ -805,7 +805,7 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 	}
 
 	// RouteExternalCertificate
-	plugin = controller.NewRouteSecretController(plugin, recorder, secretManager /*factory.CreateRoutesSharedInformer(), queue*/)
+	plugin = controller.NewRouteSecretManager(plugin, recorder, secretManager)
 
 	if o.ExtendedValidation {
 		plugin = controller.NewExtendedValidator(plugin, recorder)

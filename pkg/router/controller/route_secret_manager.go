@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	routev1 "github.com/openshift/api/route/v1"
 	"github.com/openshift/library-go/pkg/route/secretmanager"
@@ -13,26 +14,24 @@ import (
 	"k8s.io/klog/v2"
 )
 
-type RouteSecretController struct {
+type RouteSecretManager struct {
 	// plugin is the next plugin in the chain.
 	plugin router.Plugin
 	// recorder is an interface for indicating route rejections.
 	recorder RejectionRecorder
 
 	secretManager *secretmanager.Manager
-	// queue         workqueue.RateLimitingInterface
 }
 
-func NewRouteSecretController(plugin router.Plugin, recorder RejectionRecorder, secretManager *secretmanager.Manager) *RouteSecretController {
-	return &RouteSecretController{
+func NewRouteSecretManager(plugin router.Plugin, recorder RejectionRecorder, secretManager *secretmanager.Manager) *RouteSecretManager {
+	return &RouteSecretManager{
 		plugin:        plugin,
 		recorder:      recorder,
 		secretManager: secretManager,
-		// queue:         queue,
 	}
 }
 
-func (c *RouteSecretController) HandleRoute(eventType watch.EventType, route *routev1.Route) error {
+func (c *RouteSecretManager) HandleRoute(eventType watch.EventType, route *routev1.Route) error {
 	switch eventType {
 	case watch.Added:
 		if hasExternalCertificate(route) {
@@ -64,20 +63,21 @@ func (c *RouteSecretController) HandleRoute(eventType watch.EventType, route *ro
 			}
 		}
 	default:
-		klog.Error("invalid eventType", eventType)
-
+		return fmt.Errorf("invalid eventType %v", eventType)
 	}
-	// TODO: should be pass to next handler here, or after queue is done will processing ?
+
+	// call next plugin
+	// It will also update the route contents with referenced secret (if registered above)
 	return c.plugin.HandleRoute(eventType, route)
 }
 
-func (c *RouteSecretController) registerRouteWithSecretManager(route *routev1.Route) error {
+func (c *RouteSecretManager) registerRouteWithSecretManager(route *routev1.Route) error {
 	secreth := c.generateSecretHandler(route)
 	c.secretManager.WithSecretHandler(secreth)
 	return c.secretManager.RegisterRoute(context.Background(), route.Namespace, route.Name, getReferencedSecret(route))
 }
 
-func (c *RouteSecretController) generateSecretHandler(route *routev1.Route) cache.ResourceEventHandlerFuncs {
+func (c *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.ResourceEventHandlerFuncs {
 	// secret handler
 	secreth := cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
@@ -89,7 +89,7 @@ func (c *RouteSecretController) generateSecretHandler(route *routev1.Route) cach
 			secretOld := old.(*kapi.Secret)
 			secretNew := new.(*kapi.Secret)
 			klog.Info("Secret updated ", "old ", secretOld.ResourceVersion, " new ", secretNew.ResourceVersion, " For ", route.Namespace+"/"+route.Name)
-			// next plugin will update the secret (certificate) contents
+			// next plugin will update the route contents with referenced secret
 			c.plugin.HandleRoute(watch.Modified, route)
 		},
 		DeleteFunc: func(obj interface{}) {
@@ -120,18 +120,18 @@ func getReferencedSecret(route *routev1.Route) string {
 	return secretName
 }
 
-func (c *RouteSecretController) HandleNode(eventType watch.EventType, node *kapi.Node) error {
+func (c *RouteSecretManager) HandleNode(eventType watch.EventType, node *kapi.Node) error {
 	return c.plugin.HandleNode(eventType, node)
 }
 
-func (c *RouteSecretController) HandleEndpoints(eventType watch.EventType, endpoints *kapi.Endpoints) error {
+func (c *RouteSecretManager) HandleEndpoints(eventType watch.EventType, endpoints *kapi.Endpoints) error {
 	return c.plugin.HandleEndpoints(eventType, endpoints)
 }
 
-func (c *RouteSecretController) HandleNamespaces(namespaces sets.String) error {
+func (c *RouteSecretManager) HandleNamespaces(namespaces sets.String) error {
 	return c.plugin.HandleNamespaces(namespaces)
 }
 
-func (c *RouteSecretController) Commit() error {
+func (c *RouteSecretManager) Commit() error {
 	return c.plugin.Commit()
 }
