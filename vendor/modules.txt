@@ -227,6 +227,8 @@ github.com/openshift/client-go/route/listers/route/v1
 ## explicit; go 1.21
 github.com/openshift/library-go/pkg/crypto
 github.com/openshift/library-go/pkg/proc
+github.com/openshift/library-go/pkg/route/secret
+github.com/openshift/library-go/pkg/route/secretmanager
 github.com/openshift/library-go/pkg/serviceability
 # github.com/pkg/errors v0.9.1
 ## explicit

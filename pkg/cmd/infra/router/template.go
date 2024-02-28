@@ -29,6 +29,7 @@ import (
 	authoptions "k8s.io/apiserver/pkg/server/options"
 	authenticationclient "k8s.io/client-go/kubernetes/typed/authentication/v1"
 	authorizationclient "k8s.io/client-go/kubernetes/typed/authorization/v1"
+	"k8s.io/client-go/util/workqueue"
 
 	routev1 "github.com/openshift/api/route/v1"
 	projectclient "github.com/openshift/client-go/project/clientset/versioned"
@@ -36,6 +37,7 @@ import (
 	routelisters "github.com/openshift/client-go/route/listers/route/v1"
 	"github.com/openshift/library-go/pkg/crypto"
 	"github.com/openshift/library-go/pkg/proc"
+	"github.com/openshift/library-go/pkg/route/secretmanager"
 
 	"github.com/openshift/router/pkg/router"
 	"github.com/openshift/router/pkg/router/controller"
@@ -746,6 +748,9 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 		return err
 	}
 
+	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
+	secretManager := secretmanager.NewManager(kc, queue)
+
 	pluginCfg := templateplugin.TemplatePluginConfig{
 		WorkingDir:                    o.WorkingDir,
 		TemplatePath:                  o.TemplateFile,
@@ -798,6 +803,10 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 		recorder = status
 		plugin = status
 	}
+
+	// RouteExternalCertificate
+	plugin = controller.NewRouteSecretController(plugin, recorder, secretManager, factory.CreateRoutesSharedInformer(), queue)
+
 	if o.ExtendedValidation {
 		plugin = controller.NewExtendedValidator(plugin, recorder)
 	}
