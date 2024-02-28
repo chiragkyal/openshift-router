@@ -805,7 +805,7 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 	}
 
 	// RouteExternalCertificate
-	plugin = controller.NewRouteSecretController(plugin, recorder, secretManager, factory.CreateRoutesSharedInformer(), queue)
+	plugin = controller.NewRouteSecretController(plugin, recorder, secretManager /*factory.CreateRoutesSharedInformer(), queue*/)
 
 	if o.ExtendedValidation {
 		plugin = controller.NewExtendedValidator(plugin, recorder)
