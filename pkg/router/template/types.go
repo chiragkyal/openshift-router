@@ -5,6 +5,8 @@ import (
 	"time"
 
 	routev1 "github.com/openshift/api/route/v1"
+	authorizationclient "k8s.io/client-go/kubernetes/typed/authorization/v1"
+	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 // ServiceUnit represents a service and its endpoints.
@@ -183,6 +185,8 @@ type ConfigManagerOptions struct {
 
 	// AllowExternalCertificates indicates if RouteExternalCertificate feature-gate is enabled.
 	AllowExternalCertificates bool
+	SecretsGetter             corev1.SecretsGetter
+	SarClient                 authorizationclient.SubjectAccessReviewInterface
 }
 
 // ConfigManager is used by the router to make configuration changes using

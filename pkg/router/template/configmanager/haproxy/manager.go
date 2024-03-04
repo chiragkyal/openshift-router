@@ -18,6 +18,8 @@ import (
 	"github.com/openshift/router/pkg/router/routeapihelpers"
 	templaterouter "github.com/openshift/router/pkg/router/template"
 	templateutil "github.com/openshift/router/pkg/router/template/util"
+	authorizationclient "k8s.io/client-go/kubernetes/typed/authorization/v1"
+	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 
 	logf "github.com/openshift/router/log"
 )
@@ -129,6 +131,8 @@ type haproxyConfigManager struct {
 
 	// externalCertificateEnabled is set when RouteExternalCertificate feature-gate is enabled.
 	externalCertificateEnabled bool
+	secretsGetter              corev1.SecretsGetter
+	sarClient                  authorizationclient.SubjectAccessReviewInterface
 
 	// router is the associated template router.
 	router templaterouter.RouterInterface
@@ -165,12 +169,14 @@ func NewHAProxyConfigManager(options templaterouter.ConfigManagerOptions) *hapro
 	return &haproxyConfigManager{
 		connectionInfo:             options.ConnectionInfo,
 		commitInterval:             options.CommitInterval,
-		blueprintRoutes:            buildBlueprintRoutes(options.BlueprintRoutes, options.ExtendedValidation, options.AllowExternalCertificates),
+		blueprintRoutes:            buildBlueprintRoutes(options.BlueprintRoutes, options.ExtendedValidation, options.AllowExternalCertificates, options.SecretsGetter, options.SarClient),
 		blueprintRoutePoolSize:     options.BlueprintRoutePoolSize,
 		maxDynamicServers:          options.MaxDynamicServers,
 		wildcardRoutesAllowed:      options.WildcardRoutesAllowed,
 		extendedValidation:         options.ExtendedValidation,
 		externalCertificateEnabled: options.AllowExternalCertificates,
+		secretsGetter:              options.SecretsGetter,
+		sarClient:                  options.SarClient,
 		defaultCertificate:         "",
 
 		client:           client,
@@ -213,7 +219,7 @@ func (cm *haproxyConfigManager) AddBlueprint(route *routev1.Route) error {
 	newRoute.Spec.Host = ""
 
 	if cm.extendedValidation {
-		if err := routeapihelpers.ExtendedValidateRoute(newRoute, cm.externalCertificateEnabled).ToAggregate(); err != nil {
+		if err := routeapihelpers.ExtendedValidateRoute(newRoute, cm.externalCertificateEnabled, cm.secretsGetter, cm.sarClient).ToAggregate(); err != nil {
 			return err
 		}
 	}
@@ -938,7 +944,7 @@ func (entry *routeBackendEntry) BuildMapAssociations(route *routev1.Route) {
 }
 
 // buildBlueprintRoutes generates a list of blueprint routes.
-func buildBlueprintRoutes(customRoutes []*routev1.Route, validate bool, externalCertificateEnabled bool) []*routev1.Route {
+func buildBlueprintRoutes(customRoutes []*routev1.Route, validate bool, externalCertificateEnabled bool, secretsGetter corev1.SecretsGetter, sarClient authorizationclient.SubjectAccessReviewInterface) []*routev1.Route {
 	routes := make([]*routev1.Route, 0)
 
 	// Add in defaults based on the different route termination types.
@@ -960,7 +966,7 @@ func buildBlueprintRoutes(customRoutes []*routev1.Route, validate bool, external
 		dolly := r.DeepCopy()
 		dolly.Namespace = blueprintRoutePoolNamespace
 		if validate {
-			if err := routeapihelpers.ExtendedValidateRoute(dolly, externalCertificateEnabled).ToAggregate(); err != nil {
+			if err := routeapihelpers.ExtendedValidateRoute(dolly, externalCertificateEnabled, secretsGetter, sarClient).ToAggregate(); err != nil {
 				log.Error(err, "skipping blueprint route due to invalid configuration", "namespace", r.Namespace, "name", r.Name)
 				continue
 			}
