@@ -127,6 +127,9 @@ type haproxyConfigManager struct {
 	// extendedValidation indicates if extended route validation is enabled.
 	extendedValidation bool
 
+	// externalCertificateEnabled is set when RouteExternalCertificate feature-gate is enabled.
+	externalCertificateEnabled bool
+
 	// router is the associated template router.
 	router templaterouter.RouterInterface
 
@@ -160,14 +163,15 @@ func NewHAProxyConfigManager(options templaterouter.ConfigManagerOptions) *hapro
 	log.V(4).Info("creating new manager", "manager", haproxyManagerName, "options", options)
 
 	return &haproxyConfigManager{
-		connectionInfo:         options.ConnectionInfo,
-		commitInterval:         options.CommitInterval,
-		blueprintRoutes:        buildBlueprintRoutes(options.BlueprintRoutes, options.ExtendedValidation),
-		blueprintRoutePoolSize: options.BlueprintRoutePoolSize,
-		maxDynamicServers:      options.MaxDynamicServers,
-		wildcardRoutesAllowed:  options.WildcardRoutesAllowed,
-		extendedValidation:     options.ExtendedValidation,
-		defaultCertificate:     "",
+		connectionInfo:             options.ConnectionInfo,
+		commitInterval:             options.CommitInterval,
+		blueprintRoutes:            buildBlueprintRoutes(options.BlueprintRoutes, options.ExtendedValidation, options.AllowExternalCertificates),
+		blueprintRoutePoolSize:     options.BlueprintRoutePoolSize,
+		maxDynamicServers:          options.MaxDynamicServers,
+		wildcardRoutesAllowed:      options.WildcardRoutesAllowed,
+		extendedValidation:         options.ExtendedValidation,
+		externalCertificateEnabled: options.AllowExternalCertificates,
+		defaultCertificate:         "",
 
 		client:           client,
 		reloadInProgress: false,
@@ -209,7 +213,7 @@ func (cm *haproxyConfigManager) AddBlueprint(route *routev1.Route) error {
 	newRoute.Spec.Host = ""
 
 	if cm.extendedValidation {
-		if err := routeapihelpers.ExtendedValidateRoute(newRoute).ToAggregate(); err != nil {
+		if err := routeapihelpers.ExtendedValidateRoute(newRoute, cm.externalCertificateEnabled).ToAggregate(); err != nil {
 			return err
 		}
 	}
@@ -934,7 +938,7 @@ func (entry *routeBackendEntry) BuildMapAssociations(route *routev1.Route) {
 }
 
 // buildBlueprintRoutes generates a list of blueprint routes.
-func buildBlueprintRoutes(customRoutes []*routev1.Route, validate bool) []*routev1.Route {
+func buildBlueprintRoutes(customRoutes []*routev1.Route, validate bool, externalCertificateEnabled bool) []*routev1.Route {
 	routes := make([]*routev1.Route, 0)
 
 	// Add in defaults based on the different route termination types.
@@ -956,7 +960,7 @@ func buildBlueprintRoutes(customRoutes []*routev1.Route, validate bool) []*route
 		dolly := r.DeepCopy()
 		dolly.Namespace = blueprintRoutePoolNamespace
 		if validate {
-			if err := routeapihelpers.ExtendedValidateRoute(dolly).ToAggregate(); err != nil {
+			if err := routeapihelpers.ExtendedValidateRoute(dolly, externalCertificateEnabled).ToAggregate(); err != nil {
 				log.Error(err, "skipping blueprint route due to invalid configuration", "namespace", r.Namespace, "name", r.Name)
 				continue
 			}

@@ -21,15 +21,19 @@ type ExtendedValidator struct {
 
 	// recorder is an interface for indicating route rejections.
 	recorder RejectionRecorder
+
+	// externalCertificateEnabled is set when RouteExternalCertificate feature-gate is enabled.
+	externalCertificateEnabled bool
 }
 
 // NewExtendedValidator creates a plugin wrapper that ensures only routes that
 // pass extended validation are relayed to the next plugin in the chain.
 // Recorder is an interface for indicating why a route was rejected.
-func NewExtendedValidator(plugin router.Plugin, recorder RejectionRecorder) *ExtendedValidator {
+func NewExtendedValidator(plugin router.Plugin, recorder RejectionRecorder, externalCertificateEnabled bool) *ExtendedValidator {
 	return &ExtendedValidator{
-		plugin:   plugin,
-		recorder: recorder,
+		plugin:                     plugin,
+		recorder:                   recorder,
+		externalCertificateEnabled: externalCertificateEnabled,
 	}
 }
 
@@ -47,7 +51,7 @@ func (p *ExtendedValidator) HandleEndpoints(eventType watch.EventType, endpoints
 func (p *ExtendedValidator) HandleRoute(eventType watch.EventType, route *routev1.Route) error {
 	// Check if previously seen route and its Spec is unchanged.
 	routeName := routeNameKey(route)
-	if err := routeapihelpers.ExtendedValidateRoute(route).ToAggregate(); err != nil {
+	if err := routeapihelpers.ExtendedValidateRoute(route, p.externalCertificateEnabled).ToAggregate(); err != nil {
 		log.Error(err, "skipping route due to invalid configuration", "route", routeName)
 
 		p.recorder.RecordRouteRejection(route, "ExtendedValidationFailed", err.Error())
