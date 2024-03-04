@@ -155,7 +155,7 @@ func splitCertKey(data []byte) ([]byte, []byte, error) {
 // including checking that the TLS config is valid. It also sanitizes
 // the contents of valid certificates by removing any data that
 // is not recognizable PEM blocks on the incoming route.
-func ExtendedValidateRoute(route *routev1.Route) field.ErrorList {
+func ExtendedValidateRoute(route *routev1.Route, externalCertificateEnabled bool) field.ErrorList {
 	tlsConfig := route.Spec.TLS
 	result := field.ErrorList{}
 
