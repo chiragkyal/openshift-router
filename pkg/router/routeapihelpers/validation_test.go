@@ -1753,7 +1753,7 @@ func TestExtendedValidateRoute(t *testing.T) {
 
 	for _, tc := range tests {
 		// TODO: add proper tests for externalCertificateEnabled
-		errs := ExtendedValidateRoute(tc.route, false /*tc.externalCertificateEnabled*/, &testSecretGetter{}, &testSARCreator{})
+		errs := ExtendedValidateRoute(tc.route, &testSARCreator{}, &testSecretGetter{}, false /*tc.externalCertificateEnabled*/)
 		if len(errs) != tc.expectedErrors {
 			t.Errorf("Test case %s expected %d error(s), got %d. %v", tc.name, tc.expectedErrors, len(errs), errs)
 		}
