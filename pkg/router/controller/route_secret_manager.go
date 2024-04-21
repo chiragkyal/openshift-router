@@ -20,10 +20,10 @@ type RouteSecretManager struct {
 	// recorder is an interface for indicating route rejections.
 	recorder RejectionRecorder
 
-	secretManager *secretmanager.Manager
+	secretManager secretmanager.SecretManager
 }
 
-func NewRouteSecretManager(plugin router.Plugin, recorder RejectionRecorder, secretManager *secretmanager.Manager) *RouteSecretManager {
+func NewRouteSecretManager(plugin router.Plugin, recorder RejectionRecorder, secretManager secretmanager.SecretManager) *RouteSecretManager {
 	return &RouteSecretManager{
 		plugin:        plugin,
 		recorder:      recorder,
@@ -73,8 +73,7 @@ func (c *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 
 func (c *RouteSecretManager) registerRouteWithSecretManager(route *routev1.Route) error {
 	secreth := c.generateSecretHandler(route)
-	c.secretManager.WithSecretHandler(secreth)
-	return c.secretManager.RegisterRoute(context.Background(), route.Namespace, route.Name, getReferencedSecret(route))
+	return c.secretManager.RegisterRoute(context.TODO(), route.Namespace, route.Name, getReferencedSecret(route), secreth)
 }
 
 func (c *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.ResourceEventHandlerFuncs {

@@ -69,7 +69,7 @@ type TemplatePluginConfig struct {
 	HTTPHeaderNameCaseAdjustments []HTTPHeaderNameCaseAdjustment
 	HTTPResponseHeaders           []HTTPHeader
 	HTTPRequestHeaders            []HTTPHeader
-	SecretManager                 *secretmanager.Manager
+	SecretManager                 secretmanager.SecretManager
 }
 
 // RouterInterface controls the interaction of the plugin with the underlying router implementation

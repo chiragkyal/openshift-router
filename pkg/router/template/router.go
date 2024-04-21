@@ -2,6 +2,7 @@ package templaterouter
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5"
 	"encoding/pem"
 	"fmt"
@@ -65,7 +66,7 @@ type templateRouter struct {
 	state            map[ServiceAliasConfigKey]ServiceAliasConfig
 	serviceUnits     map[ServiceUnitKey]ServiceUnit
 	certManager      certificateManager
-	secretManger     *secretmanager.Manager
+	secretManger     secretmanager.SecretManager
 	// defaultCertificate is a concatenated certificate(s), their keys, and their CAs that should be used by the underlying
 	// implementation as the default certificate if no certificate is resolved by the normal matching mechanisms.  This is
 	// usually a wildcard certificate for a cloud domain such as *.mypaas.com to allow applications to create app.mypaas.com
@@ -157,7 +158,7 @@ type templateRouterCfg struct {
 	httpHeaderNameCaseAdjustments []HTTPHeaderNameCaseAdjustment
 	httpResponseHeaders           []HTTPHeader
 	httpRequestHeaders            []HTTPHeader
-	secretManager                 *secretmanager.Manager
+	secretManager                 secretmanager.SecretManager
 }
 
 // templateConfig is a subset of the templateRouter information that should be passed to the template for generating
@@ -1006,7 +1007,7 @@ func (r *templateRouter) createServiceAliasConfig(route *routev1.Route, backendK
 					return nil, fmt.Errorf("secretManger is not set")
 				}
 
-				secret, err := r.secretManger.GetSecret(route.Namespace, route.Name)
+				secret, err := r.secretManger.GetSecret(context.TODO(), route.Namespace, route.Name)
 				if err != nil {
 					return nil, err
 				}
