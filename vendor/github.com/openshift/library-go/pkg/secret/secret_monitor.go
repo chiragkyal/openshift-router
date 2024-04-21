@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/client-go/kubernetes"
@@ -32,11 +30,11 @@ type SecretMonitor interface {
 
 	// RemoveSecretEventHandler removes a previously added secret event handler using the provided registration.
 	// If the handler is not found or if there is an issue removing it, an error is returned.
-	RemoveSecretEventHandler(SecretEventHandlerRegistration) error
+	RemoveSecretEventHandler(handlerRegistration SecretEventHandlerRegistration) error
 
 	// GetSecret retrieves the secret object from the informer's cache using the provided SecretEventHandlerRegistration.
 	// This allows accessing the latest state of the secret without making an API call.
-	GetSecret(SecretEventHandlerRegistration) (*v1.Secret, error)
+	GetSecret(ctx context.Context, handlerRegistration SecretEventHandlerRegistration) (*corev1.Secret, error)
 }
 
 // secretEventHandlerRegistration is an implementation of the SecretEventHandlerRegistration.
@@ -58,7 +56,7 @@ func (r *secretEventHandlerRegistration) GetHandler() cache.ResourceEventHandler
 
 type monitoredItem struct {
 	itemMonitor *singleItemMonitor
-	numHandlers atomic.Int32
+	numHandlers int
 }
 
 // secretMonitor is an implementation of the SecretMonitor
@@ -81,23 +79,21 @@ func (s *secretMonitor) AddSecretEventHandler(ctx context.Context, namespace, se
 }
 
 // createSecretInformer creates a SharedInformer for monitoring a specific secret.
-func (s *secretMonitor) createSecretInformer(namespace, name string) func() cache.SharedInformer {
-	return func() cache.SharedInformer {
-		return cache.NewSharedInformer(
-			cache.NewListWatchFromClient(
-				s.kubeClient.CoreV1().RESTClient(),
-				"secrets",
-				namespace,
-				fields.OneTermEqualSelector("metadata.name", name),
-			),
-			&corev1.Secret{},
-			0,
-		)
-	}
+func (s *secretMonitor) createSecretInformer(namespace, name string) cache.SharedInformer {
+	return cache.NewSharedInformer(
+		cache.NewListWatchFromClient(
+			s.kubeClient.CoreV1().RESTClient(),
+			"secrets",
+			namespace,
+			fields.OneTermEqualSelector("metadata.name", name),
+		),
+		&corev1.Secret{},
+		0,
+	)
 }
 
 // addSecretEventHandler adds a secret event handler and starts the informer if not already running.
-func (s *secretMonitor) addSecretEventHandler(ctx context.Context, namespace, secretName string, handler cache.ResourceEventHandler, createInformerFn func() cache.SharedInformer) (SecretEventHandlerRegistration, error) {
+func (s *secretMonitor) addSecretEventHandler(ctx context.Context, namespace, secretName string, handler cache.ResourceEventHandler, secretInformer cache.SharedInformer) (SecretEventHandlerRegistration, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -112,12 +108,11 @@ func (s *secretMonitor) addSecretEventHandler(ctx context.Context, namespace, se
 	m, exists := s.monitors[key]
 	if !exists {
 		m = &monitoredItem{}
-		sharedInformer := createInformerFn()
-		m.itemMonitor = newSingleItemMonitor(key, sharedInformer)
+		m.itemMonitor = newSingleItemMonitor(key, secretInformer)
 		go m.itemMonitor.StartInformer(ctx)
 
 		// wait for first sync
-		if !cache.WaitForCacheSync(context.Background().Done(), m.itemMonitor.HasSynced) {
+		if !cache.WaitForCacheSync(ctx.Done(), m.itemMonitor.HasSynced) {
 			return nil, fmt.Errorf("failed waiting for cache sync")
 		}
 
@@ -132,7 +127,11 @@ func (s *secretMonitor) addSecretEventHandler(ctx context.Context, namespace, se
 	if err != nil {
 		return nil, err
 	}
-	m.numHandlers.Add(1)
+
+	// Increment numHandlers
+	m.numHandlers += 1
+
+	// TODO: this can be too noisy, later we need to use higher verbosity
 	klog.Info("secret handler added", " item key ", key)
 
 	return registration, nil
@@ -145,7 +144,7 @@ func (s *secretMonitor) RemoveSecretEventHandler(handlerRegistration SecretEvent
 	defer s.lock.Unlock()
 
 	if handlerRegistration == nil {
-		return fmt.Errorf("secret handler is nil")
+		return fmt.Errorf("nil secret handler registration is provided")
 	}
 
 	// Extract the key from the registration to identify the associated monitor.
@@ -161,13 +160,14 @@ func (s *secretMonitor) RemoveSecretEventHandler(handlerRegistration SecretEvent
 	if err := m.itemMonitor.RemoveEventHandler(handlerRegistration); err != nil {
 		return err
 	}
-	m.numHandlers.Add(-1)
+	// Decrement numHandlers
+	m.numHandlers -= 1
 	klog.Info("secret handler removed", " item key", key)
 
 	// stop informer if there is no handler
-	if m.numHandlers.Load() <= 0 {
+	if m.numHandlers <= 0 {
 		if !m.itemMonitor.StopInformer() {
-			klog.Error("secret informer already stopped", " item key", key)
+			return fmt.Errorf("secret informer already stopped for item key %v", key)
 		}
 		// remove the key from map
 		delete(s.monitors, key)
@@ -178,12 +178,12 @@ func (s *secretMonitor) RemoveSecretEventHandler(handlerRegistration SecretEvent
 }
 
 // GetSecret retrieves the secret object from the informer's cache. Error if the secret is not found in the cache.
-func (s *secretMonitor) GetSecret(handlerRegistration SecretEventHandlerRegistration) (*v1.Secret, error) {
+func (s *secretMonitor) GetSecret(ctx context.Context, handlerRegistration SecretEventHandlerRegistration) (*corev1.Secret, error) {
 	s.lock.RLock()
 	defer s.lock.RUnlock()
 
 	if handlerRegistration == nil {
-		return nil, fmt.Errorf("secret handler is nil")
+		return nil, fmt.Errorf("nil secret handler registration is provided")
 	}
 	key := handlerRegistration.GetKey()
 	secretName := key.Name
@@ -195,20 +195,20 @@ func (s *secretMonitor) GetSecret(handlerRegistration SecretEventHandlerRegistra
 	}
 
 	// wait for informer store sync, to load secrets
-	if !cache.WaitForCacheSync(context.Background().Done(), handlerRegistration.HasSynced) {
+	if !cache.WaitForCacheSync(ctx.Done(), handlerRegistration.HasSynced) {
 		return nil, fmt.Errorf("failed waiting for cache sync")
 	}
 
 	uncast, exists, err := m.itemMonitor.GetItem()
-	if !exists {
-		return nil, apierrors.NewNotFound(corev1.Resource("secrets"), secretName)
-	}
 
 	if err != nil {
 		return nil, err
 	}
+	if !exists {
+		return nil, apierrors.NewNotFound(corev1.Resource("secrets"), secretName)
+	}
 
-	secret, ok := uncast.(*v1.Secret)
+	secret, ok := uncast.(*corev1.Secret)
 	if !ok {
 		return nil, fmt.Errorf("unexpected type: %T", uncast)
 	}

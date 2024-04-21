@@ -63,14 +63,13 @@ func (i *singleItemMonitor) StartInformer(ctx context.Context) {
 	go func() {
 		select {
 		case <-ctx.Done():
-			klog.Info("stopping informer due to context cancellation")
+			klog.V(5).Info("stopping informer due to context cancellation")
 			if !i.StopInformer() {
 				klog.Error("failed to stop informer")
 			}
 		// this case is required to exit from the goroutine
-		// after normal StopInformer() call
+		// after normal StopInformer() call i.e when stopCh is closed.
 		case <-i.stopCh:
-			klog.Info("successfully stopped")
 		}
 	}()
 
