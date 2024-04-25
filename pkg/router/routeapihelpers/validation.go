@@ -2,7 +2,6 @@ package routeapihelpers
 
 import (
 	"bytes"
-	"context"
 	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/tls"
@@ -17,16 +16,8 @@ import (
 	routev1 "github.com/openshift/api/route/v1"
 	"github.com/openshift/library-go/pkg/authorization/authorizationutil"
 	authorizationv1 "k8s.io/api/authorization/v1"
-	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	authorizationclient "k8s.io/client-go/kubernetes/typed/authorization/v1"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
-)
-
-const (
-	// routerServiceAccount is used to validate RBAC permissions for externalCertificate
-	routerServiceAccount = "system:serviceaccount:openshift-ingress:router"
+	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 type blockVerifierFunc func(block *pem.Block) (*pem.Block, error)
@@ -169,7 +160,7 @@ func splitCertKey(data []byte) ([]byte, []byte, error) {
 // including checking that the TLS config is valid. It also sanitizes
 // the contents of valid certificates by removing any data that
 // is not recognizable PEM blocks on the incoming route.
-func ExtendedValidateRoute(route *routev1.Route, sarClient authorizationclient.SubjectAccessReviewInterface, secretsGetter corev1client.SecretsGetter, externalCertificateEnabled bool) field.ErrorList {
+func ExtendedValidateRoute(route *routev1.Route, externalCertificateEnabled bool, secretsGetter corev1.SecretsGetter, sarClient authorizationclient.SubjectAccessReviewInterface) field.ErrorList {
 	tlsConfig := route.Spec.TLS
 	result := field.ErrorList{}
 
@@ -181,7 +172,7 @@ func ExtendedValidateRoute(route *routev1.Route, sarClient authorizationclient.S
 	}
 
 	tlsFieldPath := field.NewPath("spec").Child("tls")
-	if errs := validateTLS(route, tlsFieldPath, sarClient, secretsGetter, externalCertificateEnabled); len(errs) != 0 {
+	if errs := validateTLS(route, tlsFieldPath); len(errs) != 0 {
 		result = append(result, errs...)
 	}
 
@@ -272,7 +263,7 @@ func ExtendedValidateRoute(route *routev1.Route, sarClient authorizationclient.S
 
 // validateTLS tests fields for different types of TLS combinations are set.  Called
 // by ValidateRoute.
-func validateTLS(route *routev1.Route, fldPath *field.Path, sarClient authorizationclient.SubjectAccessReviewInterface, secretsGetter corev1client.SecretsGetter, externalCertificateEnabled bool) field.ErrorList {
+func validateTLS(route *routev1.Route, fldPath *field.Path) field.ErrorList {
 	result := field.ErrorList{}
 	tls := route.Spec.TLS
 
@@ -285,14 +276,6 @@ func validateTLS(route *routev1.Route, fldPath *field.Path, sarClient authorizat
 	// reencrypt may specify destination ca cert
 	// cert, key, cacert may not be specified because the route may be a wildcard
 	case routev1.TLSTerminationReencrypt:
-		if externalCertificateEnabled && tls.ExternalCertificate != nil {
-			if len(tls.Certificate) > 0 && len(tls.ExternalCertificate.Name) > 0 {
-				result = append(result, field.Invalid(fldPath.Child("externalCertificate"), tls.ExternalCertificate.Name, "cannot specify both tls.certificate and tls.externalCertificate"))
-			} else if len(tls.ExternalCertificate.Name) > 0 {
-				errs := validateTLSExternalCertificate(route, fldPath.Child("externalCertificate"), sarClient, secretsGetter)
-				result = append(result, errs...)
-			}
-		}
 		//passthrough term should not specify any cert
 	case routev1.TLSTerminationPassthrough:
 		if len(tls.Certificate) > 0 {
@@ -301,12 +284,6 @@ func validateTLS(route *routev1.Route, fldPath *field.Path, sarClient authorizat
 
 		if len(tls.Key) > 0 {
 			result = append(result, field.Invalid(fldPath.Child("key"), "redacted key data", "passthrough termination does not support certificates"))
-		}
-
-		if externalCertificateEnabled && tls.ExternalCertificate != nil {
-			if len(tls.ExternalCertificate.Name) > 0 {
-				result = append(result, field.Invalid(fldPath.Child("externalCertificate"), tls.ExternalCertificate.Name, "passthrough termination does not support certificates"))
-			}
 		}
 
 		if len(tls.CACertificate) > 0 {
@@ -322,15 +299,6 @@ func validateTLS(route *routev1.Route, fldPath *field.Path, sarClient authorizat
 		if len(tls.DestinationCACertificate) > 0 {
 			result = append(result, field.Invalid(fldPath.Child("destinationCACertificate"), "redacted destination ca certificate data", "edge termination does not support destination certificates"))
 		}
-
-		if externalCertificateEnabled && tls.ExternalCertificate != nil {
-			if len(tls.Certificate) > 0 && len(tls.ExternalCertificate.Name) > 0 {
-				result = append(result, field.Invalid(fldPath.Child("externalCertificate"), tls.ExternalCertificate.Name, "cannot specify both tls.certificate and tls.externalCertificate"))
-			} else if len(tls.ExternalCertificate.Name) > 0 {
-				errs := validateTLSExternalCertificate(route, fldPath.Child("externalCertificate"), sarClient, secretsGetter)
-				result = append(result, errs...)
-			}
-		}
 	default:
 		validValues := []string{string(routev1.TLSTerminationEdge), string(routev1.TLSTerminationPassthrough), string(routev1.TLSTerminationReencrypt)}
 		result = append(result, field.NotSupported(fldPath.Child("termination"), tls.Termination, validValues))
@@ -341,60 +309,6 @@ func validateTLS(route *routev1.Route, fldPath *field.Path, sarClient authorizat
 	}
 
 	return result
-}
-
-// validateTLSExternalCertificate tests different pre-conditions required for
-// using externalCertificate. Called by validateTLS.
-func validateTLSExternalCertificate(route *routev1.Route, fldPath *field.Path, sarClient authorizationclient.SubjectAccessReviewInterface, secretsGetter corev1client.SecretsGetter) field.ErrorList {
-	tls := route.Spec.TLS
-	errs := field.ErrorList{}
-
-	// The router serviceaccount must have permission to get/list/watch the referenced secret.
-	// The role and rolebinding to provide this access must be provided by the user.
-	if err := authorizationutil.Authorize(sarClient, &user.DefaultInfo{Name: routerServiceAccount},
-		&authorizationv1.ResourceAttributes{
-			Namespace: route.Namespace,
-			Verb:      "get",
-			Resource:  "secrets",
-			Name:      tls.ExternalCertificate.Name,
-		}); err != nil {
-		errs = append(errs, field.Forbidden(fldPath, "router serviceaccount does not have permission to get this secret"))
-	}
-
-	if err := authorizationutil.Authorize(sarClient, &user.DefaultInfo{Name: routerServiceAccount},
-		&authorizationv1.ResourceAttributes{
-			Namespace: route.Namespace,
-			Verb:      "watch",
-			Resource:  "secrets",
-			Name:      tls.ExternalCertificate.Name,
-		}); err != nil {
-		errs = append(errs, field.Forbidden(fldPath, "router serviceaccount does not have permission to watch this secret"))
-	}
-
-	if err := authorizationutil.Authorize(sarClient, &user.DefaultInfo{Name: routerServiceAccount},
-		&authorizationv1.ResourceAttributes{
-			Namespace: route.Namespace,
-			Verb:      "list",
-			Resource:  "secrets",
-			Name:      tls.ExternalCertificate.Name,
-		}); err != nil {
-		errs = append(errs, field.Forbidden(fldPath, "router serviceaccount does not have permission to list this secret"))
-	}
-
-	// The secret should be in the same namespace as that of the route.
-	secret, err := secretsGetter.Secrets(route.Namespace).Get(context.TODO(), tls.ExternalCertificate.Name, metav1.GetOptions{})
-	if err != nil && apierrors.IsNotFound(err) {
-		return append(errs, field.NotFound(fldPath, err))
-	} else if err != nil {
-		return append(errs, field.InternalError(fldPath, err))
-	}
-
-	// The secret should be of type kubernetes.io/tls
-	if secret.Type != corev1.SecretTypeTLS {
-		errs = append(errs, field.Invalid(fldPath, tls.ExternalCertificate.Name, "secret of type 'kubernetes/tls' required"))
-	}
-
-	return errs
 }
 
 // validateInsecureEdgeTerminationPolicy tests fields for different types of

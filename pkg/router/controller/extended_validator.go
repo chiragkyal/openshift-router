@@ -57,7 +57,7 @@ func (p *ExtendedValidator) HandleEndpoints(eventType watch.EventType, endpoints
 func (p *ExtendedValidator) HandleRoute(eventType watch.EventType, route *routev1.Route) error {
 	// Check if previously seen route and its Spec is unchanged.
 	routeName := routeNameKey(route)
-	if err := routeapihelpers.ExtendedValidateRoute(route, p.sarClient, p.secretsGetter, p.externalCertificateEnabled).ToAggregate(); err != nil {
+	if err := routeapihelpers.ExtendedValidateRoute(route, p.externalCertificateEnabled, p.secretsGetter, p.sarClient).ToAggregate(); err != nil {
 		log.Error(err, "skipping route due to invalid configuration", "route", routeName)
 
 		p.recorder.RecordRouteRejection(route, "ExtendedValidationFailed", err.Error())

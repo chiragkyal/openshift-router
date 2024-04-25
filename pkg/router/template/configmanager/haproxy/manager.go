@@ -169,7 +169,7 @@ func NewHAProxyConfigManager(options templaterouter.ConfigManagerOptions) *hapro
 	return &haproxyConfigManager{
 		connectionInfo:             options.ConnectionInfo,
 		commitInterval:             options.CommitInterval,
-		blueprintRoutes:            buildBlueprintRoutes(options.BlueprintRoutes, options.ExtendedValidation, options.SarClient, options.SecretsGetter, options.AllowExternalCertificates),
+		blueprintRoutes:            buildBlueprintRoutes(options.BlueprintRoutes, options.ExtendedValidation, options.AllowExternalCertificates, options.SecretsGetter, options.SarClient),
 		blueprintRoutePoolSize:     options.BlueprintRoutePoolSize,
 		maxDynamicServers:          options.MaxDynamicServers,
 		wildcardRoutesAllowed:      options.WildcardRoutesAllowed,
@@ -219,7 +219,7 @@ func (cm *haproxyConfigManager) AddBlueprint(route *routev1.Route) error {
 	newRoute.Spec.Host = ""
 
 	if cm.extendedValidation {
-		if err := routeapihelpers.ExtendedValidateRoute(newRoute, cm.sarClient, cm.secretsGetter, cm.extendedValidation).ToAggregate(); err != nil {
+		if err := routeapihelpers.ExtendedValidateRoute(newRoute, cm.externalCertificateEnabled, cm.secretsGetter, cm.sarClient).ToAggregate(); err != nil {
 			return err
 		}
 	}
@@ -944,7 +944,7 @@ func (entry *routeBackendEntry) BuildMapAssociations(route *routev1.Route) {
 }
 
 // buildBlueprintRoutes generates a list of blueprint routes.
-func buildBlueprintRoutes(customRoutes []*routev1.Route, validate bool, sarClient authorizationclient.SubjectAccessReviewInterface, secretsGetter corev1.SecretsGetter, externalCertificateEnabled bool) []*routev1.Route {
+func buildBlueprintRoutes(customRoutes []*routev1.Route, validate bool, externalCertificateEnabled bool, secretsGetter corev1.SecretsGetter, sarClient authorizationclient.SubjectAccessReviewInterface) []*routev1.Route {
 	routes := make([]*routev1.Route, 0)
 
 	// Add in defaults based on the different route termination types.
@@ -966,7 +966,7 @@ func buildBlueprintRoutes(customRoutes []*routev1.Route, validate bool, sarClien
 		dolly := r.DeepCopy()
 		dolly.Namespace = blueprintRoutePoolNamespace
 		if validate {
-			if err := routeapihelpers.ExtendedValidateRoute(dolly, sarClient, secretsGetter, externalCertificateEnabled).ToAggregate(); err != nil {
+			if err := routeapihelpers.ExtendedValidateRoute(dolly, externalCertificateEnabled, secretsGetter, sarClient).ToAggregate(); err != nil {
 				log.Error(err, "skipping blueprint route due to invalid configuration", "namespace", r.Namespace, "name", r.Name)
 				continue
 			}
