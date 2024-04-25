@@ -66,7 +66,7 @@ type templateRouter struct {
 	state            map[ServiceAliasConfigKey]ServiceAliasConfig
 	serviceUnits     map[ServiceUnitKey]ServiceUnit
 	certManager      certificateManager
-	secretManger     secretmanager.SecretManager
+	secretManager    secretmanager.SecretManager
 	// defaultCertificate is a concatenated certificate(s), their keys, and their CAs that should be used by the underlying
 	// implementation as the default certificate if no certificate is resolved by the normal matching mechanisms.  This is
 	// usually a wildcard certificate for a cloud domain such as *.mypaas.com to allow applications to create app.mypaas.com
@@ -253,7 +253,7 @@ func newTemplateRouter(cfg templateRouterCfg) (*templateRouter, error) {
 		state:                         make(map[ServiceAliasConfigKey]ServiceAliasConfig),
 		serviceUnits:                  make(map[ServiceUnitKey]ServiceUnit),
 		certManager:                   certManager,
-		secretManger:                  cfg.secretManager,
+		secretManager:                 cfg.secretManager,
 		defaultCertificate:            cfg.defaultCertificate,
 		defaultCertificatePath:        cfg.defaultCertificatePath,
 		defaultCertificateDir:         cfg.defaultCertificateDir,
@@ -1003,11 +1003,11 @@ func (r *templateRouter) createServiceAliasConfig(route *routev1.Route, backendK
 
 			// read ExternalCertificate contents
 			if len(tls.Certificate) == 0 && tls.ExternalCertificate != nil && len(tls.ExternalCertificate.Name) > 0 {
-				if r.secretManger == nil {
+				if r.secretManager == nil {
 					return nil, fmt.Errorf("secretManger is not set")
 				}
 
-				secret, err := r.secretManger.GetSecret(context.TODO(), route.Namespace, route.Name)
+				secret, err := r.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
 				if err != nil {
 					return nil, err
 				}

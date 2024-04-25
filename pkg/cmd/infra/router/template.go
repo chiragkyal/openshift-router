@@ -815,14 +815,15 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 		plugin = status
 	}
 
-	// RouteExternalCertificate
-	plugin = controller.NewRouteSecretManager(plugin, recorder, secretManager)
-
 	if o.ExtendedValidation {
 		plugin = controller.NewExtendedValidator(plugin, recorder, o.AllowExternalCertificates, kc.CoreV1(), authorizationClient.SubjectAccessReviews())
 	}
 	plugin = controller.NewUniqueHost(plugin, o.RouterSelection.DisableNamespaceOwnershipCheck, recorder)
 	plugin = controller.NewHostAdmitter(plugin, o.RouteAdmissionFunc(), o.AllowWildcardRoutes, o.RouterSelection.DisableNamespaceOwnershipCheck, recorder)
+
+	if o.AllowExternalCertificates {
+		plugin = controller.NewRouteSecretManager(plugin, recorder, secretManager, kc.CoreV1(), authorizationClient.SubjectAccessReviews())
+	}
 
 	controller := factory.Create(plugin, false, stopCh)
 	controller.Run()
