@@ -2,17 +2,11 @@ package routeapihelpers
 
 import (
 	"bytes"
-	"context"
 	"reflect"
 	"testing"
 
 	routev1 "github.com/openshift/api/route/v1"
-	authorizationv1 "k8s.io/api/authorization/v1"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/diff"
-	"k8s.io/client-go/kubernetes/fake"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 const (
@@ -833,30 +827,6 @@ IrRGZJwgzmWX+NzqK9H3AyFk5p9oBuzmulVoJyKFzs1eN4ZIn25ifP8hP+uJHOTE
 jZrtwVw4rGVb/qM=
 -----END PRIVATE KEY-----`
 )
-
-type testSARCreator struct {
-	allow bool
-	err   error
-	sar   *authorizationv1.SubjectAccessReview
-}
-
-func (t *testSARCreator) Create(_ context.Context, subjectAccessReview *authorizationv1.SubjectAccessReview, _ metav1.CreateOptions) (*authorizationv1.SubjectAccessReview, error) {
-	t.sar = subjectAccessReview
-	return &authorizationv1.SubjectAccessReview{
-		Status: authorizationv1.SubjectAccessReviewStatus{
-			Allowed: t.allow,
-		},
-	}, t.err
-}
-
-type testSecretGetter struct {
-	namespace string
-	secret    *corev1.Secret
-}
-
-func (t *testSecretGetter) Secrets(_ string) corev1client.SecretInterface {
-	return fake.NewSimpleClientset(t.secret).CoreV1().Secrets(t.namespace)
-}
 
 // TestExtendedValidateRoute ensures that a route's certificate and keys
 // are valid.
@@ -1752,8 +1722,8 @@ func TestExtendedValidateRoute(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		// TODO: add proper tests for externalCertificateEnabled
-		errs := ExtendedValidateRoute(tc.route, false /*tc.externalCertificateEnabled*/, &testSecretGetter{}, &testSARCreator{})
+		// TODO: add tests
+		errs := ExtendedValidateRoute(tc.route, false /*tc.externalCertificateEnabled*/)
 		if len(errs) != tc.expectedErrors {
 			t.Errorf("Test case %s expected %d error(s), got %d. %v", tc.name, tc.expectedErrors, len(errs), errs)
 		}

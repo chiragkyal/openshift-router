@@ -10,14 +10,9 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/client-go/util/cert"
 
 	routev1 "github.com/openshift/api/route/v1"
-	"github.com/openshift/library-go/pkg/authorization/authorizationutil"
-	authorizationv1 "k8s.io/api/authorization/v1"
-	authorizationclient "k8s.io/client-go/kubernetes/typed/authorization/v1"
-	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 type blockVerifierFunc func(block *pem.Block) (*pem.Block, error)
@@ -160,12 +155,9 @@ func splitCertKey(data []byte) ([]byte, []byte, error) {
 // including checking that the TLS config is valid. It also sanitizes
 // the contents of valid certificates by removing any data that
 // is not recognizable PEM blocks on the incoming route.
-func ExtendedValidateRoute(route *routev1.Route, externalCertificateEnabled bool, secretsGetter corev1.SecretsGetter, sarClient authorizationclient.SubjectAccessReviewInterface) field.ErrorList {
+func ExtendedValidateRoute(route *routev1.Route, externalCertificateEnabled bool) field.ErrorList {
 	tlsConfig := route.Spec.TLS
 	result := field.ErrorList{}
-
-	// Test
-	authorizationutil.Authorize(sarClient, &user.DefaultInfo{Name: "routerServiceAccount"}, &authorizationv1.ResourceAttributes{})
 
 	if tlsConfig == nil {
 		return result

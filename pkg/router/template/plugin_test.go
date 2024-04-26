@@ -1,24 +1,19 @@
 package templaterouter
 
 import (
-	"context"
 	"fmt"
 	"reflect"
 	"testing"
 	"time"
 
-	authorizationv1 "k8s.io/api/authorization/v1"
-	corev1 "k8s.io/api/core/v1"
 	kapi "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/kubernetes/fake"
 
 	routev1 "github.com/openshift/api/route/v1"
 	"github.com/openshift/router/pkg/router/controller"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 const (
@@ -123,30 +118,6 @@ bGvtpjWA4r9WASIDPFsxk/cDEEEO6iPxgMOf5MdpQC2y2MU0rzF/Gg==
 
 	testDestinationCACertificate = testCACertificate
 )
-
-type testSARCreator struct {
-	allow bool
-	err   error
-	sar   *authorizationv1.SubjectAccessReview
-}
-
-func (t *testSARCreator) Create(_ context.Context, subjectAccessReview *authorizationv1.SubjectAccessReview, _ metav1.CreateOptions) (*authorizationv1.SubjectAccessReview, error) {
-	t.sar = subjectAccessReview
-	return &authorizationv1.SubjectAccessReview{
-		Status: authorizationv1.SubjectAccessReviewStatus{
-			Allowed: t.allow,
-		},
-	}, t.err
-}
-
-type testSecretGetter struct {
-	namespace string
-	secret    *corev1.Secret
-}
-
-func (t *testSecretGetter) Secrets(_ string) corev1client.SecretInterface {
-	return fake.NewSimpleClientset(t.secret).CoreV1().Secrets(t.namespace)
-}
 
 // TestRouter provides an implementation of the plugin's router interface suitable for unit testing.
 type TestRouter struct {
@@ -727,7 +698,7 @@ func TestHandleRouteExtendedValidation(t *testing.T) {
 	rejections := &fakeRejections{}
 	fake := &fakePlugin{}
 	// TODO: add tests for externalCertificateEnabled
-	plugin := controller.NewExtendedValidator(fake, rejections, false /*tc.externalCertificateEnabled*/, &testSecretGetter{}, &testSARCreator{})
+	plugin := controller.NewExtendedValidator(fake, rejections, false /*tc.externalCertificateEnabled*/)
 
 	original := metav1.Time{Time: time.Now()}
 

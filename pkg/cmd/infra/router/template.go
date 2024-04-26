@@ -723,10 +723,6 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 	if err != nil {
 		return err
 	}
-	authorizationClient, err := authorizationclient.NewForConfig(config)
-	if err != nil {
-		return err
-	}
 
 	var cfgManager templateplugin.ConfigManager
 	var blueprintPlugin router.Plugin
@@ -744,8 +740,6 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 			WildcardRoutesAllowed:     o.AllowWildcardRoutes,
 			ExtendedValidation:        o.ExtendedValidation,
 			AllowExternalCertificates: o.AllowExternalCertificates,
-			SecretsGetter:             kc.CoreV1(),
-			SarClient:                 authorizationClient.SubjectAccessReviews(),
 		}
 		cfgManager = haproxyconfigmanager.NewHAProxyConfigManager(cmopts)
 		if len(o.BlueprintRouteNamespace) > 0 {
@@ -816,7 +810,7 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 	}
 
 	if o.ExtendedValidation {
-		plugin = controller.NewExtendedValidator(plugin, recorder, o.AllowExternalCertificates, kc.CoreV1(), authorizationClient.SubjectAccessReviews())
+		plugin = controller.NewExtendedValidator(plugin, recorder, o.AllowExternalCertificates)
 	}
 	plugin = controller.NewUniqueHost(plugin, o.RouterSelection.DisableNamespaceOwnershipCheck, recorder)
 	plugin = controller.NewHostAdmitter(plugin, o.RouteAdmissionFunc(), o.AllowWildcardRoutes, o.RouterSelection.DisableNamespaceOwnershipCheck, recorder)
