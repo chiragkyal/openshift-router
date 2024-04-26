@@ -69,6 +69,7 @@ func (p *RouteSecretManager) Commit() error {
 }
 
 func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *routev1.Route) error {
+	klog.Info("Executing RouteSecretManager plugin...")
 
 	switch eventType {
 	case watch.Added:
@@ -111,7 +112,6 @@ func (p *RouteSecretManager) validateAndRegister(route *routev1.Route) error {
 	if err := validate(route, p.sarClient, p.secretsGetter).ToAggregate(); err != nil {
 		klog.Error(err, "skipping route due to invalid externalCertificate configuration", " route ", route.Name)
 		p.recorder.RecordRouteRejection(route, "ExternalCertificateValidationFailed", err.Error())
-		// route should be deleted
 		p.plugin.HandleRoute(watch.Deleted, route)
 		return fmt.Errorf("invalid route configuration for externalCertificate")
 	}
@@ -155,6 +155,7 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 			if err := validate(route, p.sarClient, p.secretsGetter).ToAggregate(); err != nil {
 				klog.Error(err, "skipping route due to invalid externalCertificate configuration", " route ", route.Name)
 				p.recorder.RecordRouteRejection(route, "ExternalCertificateValidationFailed", err.Error())
+				p.plugin.HandleRoute(watch.Deleted, route)
 			}
 
 			// read referenced secret (updated data)
@@ -162,6 +163,7 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 			if err != nil {
 				klog.Error("failed to read referenced secret", err)
 				p.recorder.RecordRouteRejection(route, "ExternalCertificateReadFailed", err.Error())
+				p.plugin.HandleRoute(watch.Deleted, route)
 			}
 
 			// update tls.Certificate and tls.Key
@@ -176,6 +178,7 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 			err := fmt.Errorf("secret %s deleted for %s/%s", secret.Name, route.Namespace, route.Name)
 			klog.Error(err)
 			p.recorder.RecordRouteRejection(route, "ExternalCertificateSecretDeleted", err.Error())
+			p.plugin.HandleRoute(watch.Deleted, route)
 		},
 	}
 	return secreth

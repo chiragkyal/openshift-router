@@ -809,12 +809,11 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 	if o.ExtendedValidation {
 		plugin = controller.NewExtendedValidator(plugin, recorder)
 	}
-	plugin = controller.NewUniqueHost(plugin, o.RouterSelection.DisableNamespaceOwnershipCheck, recorder)
-	plugin = controller.NewHostAdmitter(plugin, o.RouteAdmissionFunc(), o.AllowWildcardRoutes, o.RouterSelection.DisableNamespaceOwnershipCheck, recorder)
-
 	if o.AllowExternalCertificates {
 		plugin = controller.NewRouteSecretManager(plugin, recorder, secretManager, kc.CoreV1(), authorizationClient.SubjectAccessReviews())
 	}
+	plugin = controller.NewUniqueHost(plugin, o.RouterSelection.DisableNamespaceOwnershipCheck, recorder)
+	plugin = controller.NewHostAdmitter(plugin, o.RouteAdmissionFunc(), o.AllowWildcardRoutes, o.RouterSelection.DisableNamespaceOwnershipCheck, recorder)
 
 	controller := factory.Create(plugin, false, stopCh)
 	controller.Run()
