@@ -697,8 +697,7 @@ func (p *fakePlugin) Commit() error {
 func TestHandleRouteExtendedValidation(t *testing.T) {
 	rejections := &fakeRejections{}
 	fake := &fakePlugin{}
-	// TODO: add tests for externalCertificateEnabled
-	plugin := controller.NewExtendedValidator(fake, rejections, false /*tc.externalCertificateEnabled*/)
+	plugin := controller.NewExtendedValidator(fake, rejections)
 
 	original := metav1.Time{Time: time.Now()}
 

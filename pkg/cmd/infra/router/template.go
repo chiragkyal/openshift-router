@@ -142,9 +142,6 @@ type TemplateRouterConfigManager struct {
 	BlueprintRouteLabelSelector string
 	BlueprintRoutePoolSize      int
 	MaxDynamicServers           int
-	// AllowExternalCertificates is set when cluster-ingress-operator propagates
-	// ROUTER_ENABLE_EXTERNAL_CERTIFICATE env var, if RouteExternalCertificate feature-gate is enabled.
-	AllowExternalCertificates bool
 }
 
 // isTrue here has the same logic as the function within package pkg/router/template
@@ -186,7 +183,6 @@ func (o *TemplateRouter) Bind(flag *pflag.FlagSet) {
 	flag.StringVar(&o.BlueprintRouteLabelSelector, "blueprint-route-labels", env("ROUTER_BLUEPRINT_ROUTE_LABELS", ""), "A label selector to apply to the routes in the blueprint route namespace. These selected routes will serve as blueprints for the dynamic dynamic configuration manager.")
 	flag.IntVar(&o.BlueprintRoutePoolSize, "blueprint-route-pool-size", int(envInt("ROUTER_BLUEPRINT_ROUTE_POOL_SIZE", 10, 1)), "Specifies the size of the pre-allocated pool for each route blueprint managed by the router specific dynamic configuration manager. This can be overriden by an annotation router.openshift.io/pool-size on an individual route.")
 	flag.IntVar(&o.MaxDynamicServers, "max-dynamic-servers", int(envInt("ROUTER_MAX_DYNAMIC_SERVERS", 5, 1)), "Specifies the maximum number of dynamic servers added to a route for use by the router specific dynamic configuration manager.")
-	flag.BoolVar(&o.AllowExternalCertificates, "allow-external-certificates", isTrue(env("ROUTER_ENABLE_EXTERNAL_CERTIFICATE", "")), "Enable RouteExternalCertificate feature-gate")
 	flag.StringVar(&o.CaptureHTTPRequestHeadersString, "capture-http-request-headers", env("ROUTER_CAPTURE_HTTP_REQUEST_HEADERS", ""), "A comma-delimited list of HTTP request header names and maximum header value lengths that should be captured for logging. Each item must have the following form: name:maxLength")
 	flag.StringVar(&o.CaptureHTTPResponseHeadersString, "capture-http-response-headers", env("ROUTER_CAPTURE_HTTP_RESPONSE_HEADERS", ""), "A comma-delimited list of HTTP response header names and maximum header value lengths that should be captured for logging. Each item must have the following form: name:maxLength")
 	flag.StringVar(&o.CaptureHTTPCookieString, "capture-http-cookie", env("ROUTER_CAPTURE_HTTP_COOKIE", ""), "Name and maximum length of HTTP cookie that should be captured for logging.  The argument must have the following form: name:maxLength. Append '=' to the name to indicate that an exact match should be performed; otherwise a prefix match will be performed.  The value of first cookie that matches the name is captured.")
@@ -732,14 +728,13 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 			return err
 		}
 		cmopts := templateplugin.ConfigManagerOptions{
-			ConnectionInfo:            "unix:///var/lib/haproxy/run/haproxy.sock",
-			CommitInterval:            o.CommitInterval,
-			BlueprintRoutes:           blueprintRoutes,
-			BlueprintRoutePoolSize:    o.BlueprintRoutePoolSize,
-			MaxDynamicServers:         o.MaxDynamicServers,
-			WildcardRoutesAllowed:     o.AllowWildcardRoutes,
-			ExtendedValidation:        o.ExtendedValidation,
-			AllowExternalCertificates: o.AllowExternalCertificates,
+			ConnectionInfo:         "unix:///var/lib/haproxy/run/haproxy.sock",
+			CommitInterval:         o.CommitInterval,
+			BlueprintRoutes:        blueprintRoutes,
+			BlueprintRoutePoolSize: o.BlueprintRoutePoolSize,
+			MaxDynamicServers:      o.MaxDynamicServers,
+			WildcardRoutesAllowed:  o.AllowWildcardRoutes,
+			ExtendedValidation:     o.ExtendedValidation,
 		}
 		cfgManager = haproxyconfigmanager.NewHAProxyConfigManager(cmopts)
 		if len(o.BlueprintRouteNamespace) > 0 {
@@ -810,7 +805,7 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 	}
 
 	if o.ExtendedValidation {
-		plugin = controller.NewExtendedValidator(plugin, recorder, o.AllowExternalCertificates)
+		plugin = controller.NewExtendedValidator(plugin, recorder)
 	}
 	plugin = controller.NewUniqueHost(plugin, o.RouterSelection.DisableNamespaceOwnershipCheck, recorder)
 	plugin = controller.NewHostAdmitter(plugin, o.RouteAdmissionFunc(), o.AllowWildcardRoutes, o.RouterSelection.DisableNamespaceOwnershipCheck, recorder)

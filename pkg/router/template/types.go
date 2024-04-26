@@ -180,9 +180,6 @@ type ConfigManagerOptions struct {
 
 	// ExtendedValidation indicates if extended route validation is enabled.
 	ExtendedValidation bool
-
-	// AllowExternalCertificates indicates if RouteExternalCertificate feature-gate is enabled.
-	AllowExternalCertificates bool
 }
 
 // ConfigManager is used by the router to make configuration changes using
