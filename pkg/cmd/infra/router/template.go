@@ -751,8 +751,7 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 		return err
 	}
 
-	// queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
-	secretManager := secretmanager.NewManager(kc, nil /*queue*/)
+	secretManager := secretmanager.NewManager(kc, nil)
 
 	pluginCfg := templateplugin.TemplatePluginConfig{
 		WorkingDir:                    o.WorkingDir,
@@ -807,7 +806,6 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 		recorder = status
 		plugin = status
 	}
-
 	if o.ExtendedValidation {
 		plugin = controller.NewExtendedValidator(plugin, recorder)
 	}

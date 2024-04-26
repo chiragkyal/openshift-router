@@ -476,8 +476,7 @@ func TestCreateServiceAliasConfig(t *testing.T) {
 		},
 	}
 
-	// TODO: error handling?
-	config, _ := router.createServiceAliasConfig(route, "foo")
+	config := *router.createServiceAliasConfig(route, "foo")
 
 	suName := endpointsKeyFromParts(namespace, serviceName)
 	expectedSUs := map[ServiceUnitKey]int32{
@@ -488,7 +487,7 @@ func TestCreateServiceAliasConfig(t *testing.T) {
 	httpRequestHeadersList := []HTTPHeader{{Name: "'Accept'", Value: "'text/plain,text/html'", Action: "Set"}, {Name: "'x-client'", Value: `'"abc"\ '\''def'\'''`, Action: "Set"}, {Name: "'Accept-Encoding'", Action: "Delete"}, {Name: "'Accept'", Value: "'text/}plain,text/html{'", Action: "Set"}}
 
 	// Basic sanity, validate more fields as necessary
-	if config.Host != route.Spec.Host || config.Path != route.Spec.Path || !compareTLS(route, *config, t) ||
+	if config.Host != route.Spec.Host || config.Path != route.Spec.Path || !compareTLS(route, config, t) ||
 		config.PreferPort != route.Spec.Port.TargetPort.String() || !reflect.DeepEqual(expectedSUs, config.ServiceUnits) ||
 		config.ActiveServiceUnits != 0 ||
 		!cmp.Equal(config.HTTPResponseHeaders, httpResponseHeadersList) ||

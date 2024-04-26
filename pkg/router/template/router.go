@@ -2,7 +2,6 @@ package templaterouter
 
 import (
 	"bytes"
-	"context"
 	"crypto/md5"
 	"encoding/pem"
 	"fmt"
@@ -943,7 +942,7 @@ func getPartsFromRouteKey(key ServiceAliasConfigKey) (string, string) {
 
 // createServiceAliasConfig creates a ServiceAliasConfig from a route and the router state.
 // The router state is not modified in the process, so referenced ServiceUnits may not exist.
-func (r *templateRouter) createServiceAliasConfig(route *routev1.Route, backendKey ServiceAliasConfigKey) (*ServiceAliasConfig, error) {
+func (r *templateRouter) createServiceAliasConfig(route *routev1.Route, backendKey ServiceAliasConfigKey) *ServiceAliasConfig {
 	wantsWildcardSupport := (route.Spec.WildcardPolicy == routev1.WildcardPolicySubdomain)
 
 	// The router config trumps what the route asks for/wants.
@@ -1001,25 +1000,7 @@ func (r *templateRouter) createServiceAliasConfig(route *routev1.Route, backendK
 		if tls.Termination != routev1.TLSTerminationPassthrough {
 			config.Certificates = make(map[string]Certificate)
 
-			// read ExternalCertificate contents
-			if len(tls.Certificate) == 0 && tls.ExternalCertificate != nil && len(tls.ExternalCertificate.Name) > 0 {
-				if r.secretManager == nil {
-					return nil, fmt.Errorf("secretManger is not set")
-				}
-
-				secret, err := r.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
-				if err != nil {
-					return nil, err
-				}
-				certKey := generateCertKey(&config)
-				cert := Certificate{
-					ID:         string(backendKey),
-					Contents:   string(secret.Data["tls.crt"]),
-					PrivateKey: string(secret.Data["tls.key"]),
-				}
-				config.Certificates[certKey] = cert
-
-			} else if len(tls.Certificate) > 0 && tls.ExternalCertificate == nil {
+			if len(tls.Certificate) > 0 {
 				certKey := generateCertKey(&config)
 				cert := Certificate{
 					ID:         string(backendKey),
@@ -1052,7 +1033,7 @@ func (r *templateRouter) createServiceAliasConfig(route *routev1.Route, backendK
 		}
 	}
 
-	return &config, nil
+	return &config
 }
 
 func getHeadersList(httpHeaderList []routev1.RouteHTTPHeader) []HTTPHeader {
@@ -1089,12 +1070,7 @@ func SanitizeHeaderValue(headerValue string) string {
 func (r *templateRouter) AddRoute(route *routev1.Route) {
 	backendKey := routeKey(route)
 
-	newConfig, err := r.createServiceAliasConfig(route, backendKey)
-	// TODO: proper error handling?
-	if err != nil {
-		log.V(2).Error(err, "failed to add route", "namespace", route.Namespace, "name", route.Name)
-		return
-	}
+	newConfig := r.createServiceAliasConfig(route, backendKey)
 
 	// We have to call the internal form of functions after this
 	// because we are holding the state lock.
@@ -1142,6 +1118,13 @@ func (r *templateRouter) RemoveRoute(route *routev1.Route) {
 	defer r.lock.Unlock()
 
 	r.removeRouteInternal(route)
+
+	// TODO: do we need to unregister here also?
+	// if r.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
+	// 	if err := r.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
+	// 		klog.Error("failed to unregister route", err)
+	// 	}
+	// }
 }
 
 // removeRouteInternal removes the given route - internal
