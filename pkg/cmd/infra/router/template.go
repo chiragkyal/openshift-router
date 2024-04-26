@@ -719,6 +719,10 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 	if err != nil {
 		return err
 	}
+	authorizationClient, err := authorizationclient.NewForConfig(config)
+	if err != nil {
+		return err
+	}
 
 	var cfgManager templateplugin.ConfigManager
 	var blueprintPlugin router.Plugin
