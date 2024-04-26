@@ -104,19 +104,19 @@ func (s *secretMonitor) addSecretEventHandler(ctx context.Context, namespace, se
 	// secret identifier (namespace/secret)
 	key := NewObjectKey(namespace, secretName)
 
-	// start secret informer if monitor does not exists
+	// Start secret informer if monitor does not exist.
 	m, exists := s.monitors[key]
 	if !exists {
 		m = &monitoredItem{}
 		m.itemMonitor = newSingleItemMonitor(key, secretInformer)
-		go m.itemMonitor.StartInformer(ctx)
+		m.itemMonitor.StartInformer(ctx)
 
 		// wait for first sync
 		if !cache.WaitForCacheSync(ctx.Done(), m.itemMonitor.HasSynced) {
 			return nil, fmt.Errorf("failed waiting for cache sync")
 		}
 
-		// add item key to monitors map // add watch to the list
+		// add item key to monitors map
 		s.monitors[key] = m
 
 		klog.Info("secret informer started", " item key ", key)

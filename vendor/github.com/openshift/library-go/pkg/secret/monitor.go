@@ -49,14 +49,14 @@ func (i *singleItemMonitor) HasSynced() bool {
 	return i.informer.HasSynced()
 }
 
-// StartInformer starts and runs the informer util the provided context is canceled,
-// or StopInformer() is called. It will block, so call via goroutine.
+// StartInformer starts and runs the informer until the provided context is canceled,
+// or StopInformer() is called.
 func (i *singleItemMonitor) StartInformer(ctx context.Context) {
 	i.lock.Lock()
+	defer i.lock.Unlock()
 
 	if !i.stopped {
 		klog.Warning("informer is already running")
-		i.lock.Unlock()
 		return
 	}
 
@@ -75,9 +75,8 @@ func (i *singleItemMonitor) StartInformer(ctx context.Context) {
 
 	klog.Info("starting informer")
 	i.stopped = false
-	i.lock.Unlock()
 
-	i.informer.Run(i.stopCh)
+	go i.informer.Run(i.stopCh)
 }
 
 // StopInformer stops the informer.
@@ -102,7 +101,7 @@ func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) 
 	defer i.lock.Unlock()
 
 	if i.stopped {
-		return nil, fmt.Errorf("can not add handler %v to already stopped informer", handler)
+		return nil, fmt.Errorf("cannot add handler %v to already stopped informer", handler)
 	}
 
 	registration, err := i.informer.AddEventHandler(handler)
@@ -120,6 +119,10 @@ func (i *singleItemMonitor) AddEventHandler(handler cache.ResourceEventHandler) 
 func (i *singleItemMonitor) RemoveEventHandler(handle SecretEventHandlerRegistration) error {
 	i.lock.Lock()
 	defer i.lock.Unlock()
+
+	if handle == nil {
+		return fmt.Errorf("nil handler registration is provided")
+	}
 
 	if i.stopped {
 		return fmt.Errorf("can not remove handler %v from stopped informer", handle.GetHandler())

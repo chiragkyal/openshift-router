@@ -7,7 +7,6 @@ import (
 
 	"github.com/openshift/library-go/pkg/secret"
 	v1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
@@ -66,14 +65,14 @@ func (m *manager) RegisterRoute(ctx context.Context, namespace, routeName, secre
 	// Each route (namespace/routeName) should be registered only once with any secret.
 	// Note: inside a namespace multiple different routes can be registered(watch) with a common secret.
 	if _, exists := m.registeredHandlers[key]; exists {
-		return apierrors.NewInternalError(fmt.Errorf("route already registered with key %s", key))
+		return fmt.Errorf("route already registered with key %s", key)
 	}
 
 	// Add a secret event handler for the specified namespace and secret, with the handler functions.
 	klog.V(5).Infof("trying to add handler for key %s with secret %s", key, secretName)
 	handlerRegistration, err := m.monitor.AddSecretEventHandler(ctx, namespace, secretName, handler)
 	if err != nil {
-		return apierrors.NewInternalError(err)
+		return err
 	}
 
 	// Store the registration in the manager's map. Used during UnregisterRoute() and GetSecret().
@@ -94,14 +93,14 @@ func (m *manager) UnregisterRoute(namespace, routeName string) error {
 	// Get the registered handler.
 	handlerRegistration, exists := m.registeredHandlers[key]
 	if !exists {
-		return apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key))
+		return fmt.Errorf("no handler registered with key %s", key)
 	}
 
 	// Remove the corresponding secret event handler from the secret monitor.
 	klog.V(5).Info("trying to remove handler with key", key)
 	err := m.monitor.RemoveSecretEventHandler(handlerRegistration)
 	if err != nil {
-		return apierrors.NewInternalError(err)
+		return err
 	}
 
 	// delete the registered handler from manager's map of handlers.
@@ -120,10 +119,10 @@ func (m *manager) GetSecret(ctx context.Context, namespace, routeName string) (*
 
 	handlerRegistration, exists := m.registeredHandlers[key]
 	if !exists {
-		return nil, apierrors.NewInternalError(fmt.Errorf("no handler registered with key %s", key))
+		return nil, fmt.Errorf("no handler registered with key %s", key)
 	}
 
-	// get secret from secrt monitor's cache using registered handler
+	// Get the secret from the secret monitor's cache using the registered handler.
 	obj, err := m.monitor.GetSecret(ctx, handlerRegistration)
 	if err != nil {
 		return nil, err

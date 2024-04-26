@@ -13,9 +13,9 @@ require (
 	github.com/gocarina/gocsv v0.0.0-20190927101021-3ecffd272576
 	github.com/google/go-cmp v0.6.0
 	github.com/haproxytech/config-parser/v4 v4.0.0-rc1
-	github.com/openshift/api v0.0.0-20231218131639-7a5aa77cc72d
-	github.com/openshift/client-go v0.0.0-20231218140158-47f6d749b9d9
-	github.com/openshift/library-go v0.0.0-20230120202744-256994f916c4
+	github.com/openshift/api v0.0.0-20240424142232-29a704bf5aa2
+	github.com/openshift/client-go v0.0.0-20240405120947-c67c8325cdd8
+	github.com/openshift/library-go v0.0.0-20240425161310-f9d4805a7c60
 	github.com/prometheus/client_golang v1.16.0
 	github.com/prometheus/client_model v0.4.0
 	github.com/prometheus/common v0.44.0
@@ -116,5 +116,3 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.4.1 // indirect
 	sigs.k8s.io/yaml v1.3.0 // indirect
 )
-
-replace github.com/openshift/library-go => github.com/chiragkyal/library-go v0.0.0-20240419080732-586b7846766c
