@@ -64,7 +64,7 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 
 	switch eventType {
 	case watch.Added:
-		// create new watch
+		// register with secret monitor
 		if hasExternalCertificate(route) {
 			if err := p.validateAndRegister(route); err != nil {
 				return err
@@ -72,14 +72,14 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 		}
 
 	case watch.Modified:
-		// remove old watch
+		// unregister associated secret monitor, if registered
 		if p.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
 			if err := p.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
 				klog.Error("failed to unregister route", err)
 				return err
 			}
 		}
-		// create new watch
+		// register with secret monitor
 		if hasExternalCertificate(route) {
 			if err := p.validateAndRegister(route); err != nil {
 				return err
@@ -87,7 +87,7 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 		}
 
 	case watch.Deleted:
-		// remove old watch
+		// unregister associated secret monitor, if registered
 		if p.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
 			if err := p.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
 				klog.Error("failed to unregister route", err)
@@ -170,9 +170,15 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 		},
 		DeleteFunc: func(obj interface{}) {
 			secret := obj.(*kapi.Secret)
-			err := fmt.Errorf("secret %s deleted for %s/%s", secret.Name, route.Namespace, route.Name)
-			klog.Error(err)
-			p.recorder.RecordRouteRejection(route, "ExternalCertificateSecretDeleted", err.Error())
+			msg := fmt.Sprintf("secret %s deleted for %s/%s", secret.Name, route.Namespace, route.Name)
+			klog.Info(msg)
+
+			// unregister associated secret monitor
+			if err := p.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
+				klog.Error("failed to unregister route", err)
+			}
+
+			p.recorder.RecordRouteRejection(route, "ExternalCertificateSecretDeleted", msg)
 			p.plugin.HandleRoute(watch.Deleted, route)
 		},
 	}
