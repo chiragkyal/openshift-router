@@ -1121,7 +1121,7 @@ func (r *templateRouter) RemoveRoute(route *routev1.Route) {
 	r.removeRouteInternal(route)
 
 	// TODO: do we need to unregister here also?
-	if r.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
+	if r.secretManager != nil && r.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
 		if err := r.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
 			klog.Error("failed to unregister route", err)
 		}
