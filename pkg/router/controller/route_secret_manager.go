@@ -32,7 +32,8 @@ type RouteSecretManager struct {
 	sarClient     authorizationclient.SubjectAccessReviewInterface
 }
 
-// NewRouteSecretManager creates a plugin wrapper that ....
+// NewRouteSecretManager creates a new instance of RouteSecretManager.
+// It wraps the provided plugin and adds secret management capabilities.
 func NewRouteSecretManager(plugin router.Plugin, recorder RouteStatusRecorder, secretManager secretmanager.SecretManager, secretsGetter corev1client.SecretsGetter, sarClient authorizationclient.SubjectAccessReviewInterface) *RouteSecretManager {
 	return &RouteSecretManager{
 		plugin:        plugin,
@@ -59,6 +60,11 @@ func (p *RouteSecretManager) Commit() error {
 	return p.plugin.Commit()
 }
 
+// HandleRoute manages the registration, unregistration, and validation of routes with external certificates.
+// For Added events, it validates the route's external certificate configuration and registers it with the secret manager.
+// For Modified events, it first unregisters the route if it's already registered and then revalidates and registers it again.
+// For Deleted events, it unregisters the route if it's registered.
+// Additionally, it delegates the handling of the event to the next plugin in the chain after performing the necessary actions.
 func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *routev1.Route) error {
 	klog.Infof("Executing RouteSecretManager plugin with eventType %s...", eventType)
 
@@ -102,6 +108,8 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 	return p.plugin.HandleRoute(eventType, route)
 }
 
+// validateAndRegister validates the route's externalCertificate configuration and registers it with the secret manager.
+// It also updates the in-memory TLS certificate and key after reading from secret informer's cache.
 func (p *RouteSecretManager) validateAndRegister(route *routev1.Route) error {
 	fldPath := field.NewPath("spec").Child("tls").Child("externalCertificate")
 	// validate
@@ -132,6 +140,12 @@ func (p *RouteSecretManager) validateAndRegister(route *routev1.Route) error {
 	return nil
 }
 
+// generateSecretHandler creates ResourceEventHandlerFuncs to handle Add, Update, and Delete events on secrets.
+// AddFunc: Invoked when a new secret is added. It logs the addition of the secret.
+// UpdateFunc: Invoked when an existing secret is updated. It performs validation of the route's external certificate configuration.
+// If the validation fails, it records the route rejection, and triggers the deletion of the route by calling the HandleRoute method with a watch.Deleted event.
+// If the validation succeeds, it updates the route's TLS certificate and key with the new secret data and calls the next plugin's HandleRoute method with a watch.Modified event, and then the next plugin's Commit() method.
+// DeleteFunc: Invoked when the secret is deleted. It unregisters the associated route, records the route rejection, and triggers the deletion of the route by calling the HandleRoute method with a watch.Deleted event.
 func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.ResourceEventHandlerFuncs {
 	// secret handler
 	secreth := cache.ResourceEventHandlerFuncs{
@@ -167,6 +181,8 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 
 			// call the next plugin with watch.Modified
 			p.plugin.HandleRoute(watch.Modified, route)
+			// commit the changes
+			p.plugin.Commit()
 		},
 		DeleteFunc: func(obj interface{}) {
 			secret := obj.(*kapi.Secret)
