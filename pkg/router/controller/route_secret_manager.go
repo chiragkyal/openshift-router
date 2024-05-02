@@ -165,6 +165,7 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 				klog.Error(err, "skipping route due to invalid externalCertificate configuration", " route ", route.Name)
 				p.recorder.RecordRouteRejection(route, "ExternalCertificateValidationFailed", err.Error())
 				p.plugin.HandleRoute(watch.Deleted, route)
+				return
 			}
 
 			// read referenced secret (updated data)
@@ -173,6 +174,7 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 				klog.Error("failed to read referenced secret", err)
 				p.recorder.RecordRouteRejection(route, "ExternalCertificateReadFailed", err.Error())
 				p.plugin.HandleRoute(watch.Deleted, route)
+				return
 			}
 
 			// update tls.Certificate and tls.Key
