@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
-	"time"
 
 	"github.com/openshift/library-go/pkg/route/secretmanager/fake"
 
@@ -15,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/watch"
 	testclient "k8s.io/client-go/kubernetes/fake"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
@@ -75,6 +75,33 @@ func fakeSecret(namespace, name string, secretType corev1.SecretType, data map[s
 		Data: data,
 		Type: secretType,
 	}
+}
+
+type fakePluginNew struct {
+	t      watch.EventType
+	route  *routev1.Route
+	err    error
+	stopCh chan struct{}
+}
+
+func (p *fakePluginNew) HandleRoute(t watch.EventType, route *routev1.Route) error {
+	defer close(p.stopCh)
+	p.t, p.route = t, route
+	return p.err
+}
+
+func (p *fakePluginNew) HandleNode(t watch.EventType, node *corev1.Node) error {
+	return fmt.Errorf("not expected")
+}
+
+func (p *fakePluginNew) HandleEndpoints(watch.EventType, *corev1.Endpoints) error {
+	return fmt.Errorf("not expected")
+}
+func (p *fakePluginNew) HandleNamespaces(namespaces sets.String) error {
+	return fmt.Errorf("not expected")
+}
+func (p *fakePluginNew) Commit() error {
+	return p.err
 }
 
 func TestRouteSecretManager(t *testing.T) {
@@ -1069,7 +1096,9 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 			informer := fakeSecretInformer(context.TODO(), kubeClient, "sandbox", "tls-secret")
 			go informer.Run(context.TODO().Done())
 
-			p := &fakePlugin{}
+			p := &fakePluginNew{
+				stopCh: make(chan struct{}),
+			}
 			recorder := routeStatusRecorder{rejections: make(map[string]string)}
 			rsm := NewRouteSecretManager(p, recorder, &s.secretManager, &testSecretGetter{namespace: s.route.Namespace, secret: oldSecret}, &testSARCreator{allow: s.allow})
 
@@ -1093,8 +1122,8 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 					t.Fatal("failed to update secret", err)
 				}
 			}
-			// wait for secret informer UpdateFunc or DeleteFunc to act
-			time.Sleep(1 * time.Second)
+			// wait until p.plugin.HandleRoute() completes (required to handle race condition)
+			<-p.stopCh
 
 			if !reflect.DeepEqual(s.expectedRoute, p.route) {
 				t.Fatalf("expected route for next plugin %v, but got %v", s.expectedRoute, p.route)
