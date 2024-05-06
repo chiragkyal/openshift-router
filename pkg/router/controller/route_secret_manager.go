@@ -15,7 +15,6 @@ import (
 	authorizationclient "k8s.io/client-go/kubernetes/typed/authorization/v1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog/v2"
 )
 
 // RouteSecretManager implements the router.Plugin interface to register
@@ -66,7 +65,7 @@ func (p *RouteSecretManager) Commit() error {
 // For Deleted events, it unregisters the route if it's registered.
 // Additionally, it delegates the handling of the event to the next plugin in the chain after performing the necessary actions.
 func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *routev1.Route) error {
-	klog.Infof("Executing RouteSecretManager plugin with eventType %s...", eventType)
+	log.V(10).Info("HandleRoute: RouteSecretManager", "eventType", eventType)
 
 	switch eventType {
 	case watch.Added:
@@ -81,7 +80,7 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 		// unregister associated secret monitor, if registered
 		if p.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
 			if err := p.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
-				klog.Error("failed to unregister route", err)
+				log.Error(err, "failed to unregister route")
 				return err
 			}
 		}
@@ -96,7 +95,7 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 		// unregister associated secret monitor, if registered
 		if p.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
 			if err := p.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
-				klog.Error("failed to unregister route", err)
+				log.Error(err, "failed to unregister route")
 				return err
 			}
 		}
@@ -114,26 +113,27 @@ func (p *RouteSecretManager) validateAndRegister(route *routev1.Route) error {
 	fldPath := field.NewPath("spec").Child("tls").Child("externalCertificate")
 	// validate
 	if err := routeapihelpers.ValidateTLSExternalCertificate(route, fldPath, p.sarClient, p.secretsGetter).ToAggregate(); err != nil {
-		klog.Error(err, "skipping route due to invalid externalCertificate configuration", " route ", route.Name)
+		log.Error(err, "skipping route due to invalid externalCertificate configuration", "namespace", route.Namespace, "route", route.Name)
 		p.recorder.RecordRouteRejection(route, "ExternalCertificateValidationFailed", err.Error())
 		p.plugin.HandleRoute(watch.Deleted, route)
-		return fmt.Errorf("invalid route configuration for externalCertificate")
+		return err
 	}
 
 	// register route with secretManager
 	secreth := p.generateSecretHandler(route)
 	if err := p.secretManager.RegisterRoute(context.TODO(), route.Namespace, route.Name, getReferencedSecret(route), secreth); err != nil {
-		klog.Error("failed to register route", err)
+		log.Error(err, "failed to register route")
 		return err
 	}
 	// read referenced secret
 	secret, err := p.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
 	if err != nil {
-		klog.Error("failed to read referenced secret", err)
+		log.Error(err, "failed to read referenced secret")
 		return err
 	}
 	// update tls.Certificate and tls.Key
-	// NOTE: this will be in-memory change and won't update actual route resource
+	// since externalCertificate will not contain CACertificate, tls.CACertificate won't be updated.
+	// NOTE: this will be in-memory change and won't update actual route resource.
 	route.Spec.TLS.Certificate = string(secret.Data["tls.crt"])
 	route.Spec.TLS.Key = string(secret.Data["tls.key"])
 
@@ -151,18 +151,18 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 	secreth := cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			secret := obj.(*kapi.Secret)
-			klog.Infof("secret %s added for %s/%s", secret.Name, route.Namespace, route.Name)
+			log.V(4).Info("secret added for route", "namespace", route.Namespace, "secret", secret.Name, "route", route.Name)
 			// Do nothing for add event
 		},
 		UpdateFunc: func(old interface{}, new interface{}) {
 			secretOld := old.(*kapi.Secret)
 			secretNew := new.(*kapi.Secret)
-			klog.Infof("secret %s updated: old version %s, new version %s for %s/%s", secretNew.Name, secretOld.ResourceVersion, secretNew.ResourceVersion, route.Namespace, route.Name)
+			log.V(4).Info("secret updated for route", "namespace", route.Namespace, "secret", secretNew.Name, "old-version", secretOld.ResourceVersion, "new-version", secretNew.ResourceVersion, "route", route.Name)
 
 			// re-validate
 			fldPath := field.NewPath("spec").Child("tls").Child("externalCertificate")
 			if err := routeapihelpers.ValidateTLSExternalCertificate(route, fldPath, p.sarClient, p.secretsGetter).ToAggregate(); err != nil {
-				klog.Error(err, "skipping route due to invalid externalCertificate configuration", " route ", route.Name)
+				log.Error(err, "skipping route due to invalid externalCertificate configuration", "namespace", route.Namespace, "route", route.Name)
 				p.recorder.RecordRouteRejection(route, "ExternalCertificateValidationFailed", err.Error())
 				p.plugin.HandleRoute(watch.Deleted, route)
 				return
@@ -171,7 +171,7 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 			// read referenced secret (updated data)
 			secret, err := p.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
 			if err != nil {
-				klog.Error("failed to read referenced secret", err)
+				log.Error(err, "failed to read referenced secret")
 				p.recorder.RecordRouteRejection(route, "ExternalCertificateReadFailed", err.Error())
 				p.plugin.HandleRoute(watch.Deleted, route)
 				return
@@ -188,12 +188,12 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 		},
 		DeleteFunc: func(obj interface{}) {
 			secret := obj.(*kapi.Secret)
-			msg := fmt.Sprintf("secret %s deleted for %s/%s", secret.Name, route.Namespace, route.Name)
-			klog.Info(msg)
+			msg := fmt.Sprintf("secret %s deleted for route %s/%s", secret.Name, route.Namespace, route.Name)
+			log.V(4).Info(msg)
 
 			// unregister associated secret monitor
 			if err := p.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
-				klog.Error("failed to unregister route", err)
+				log.Error(err, "failed to unregister route")
 			}
 
 			p.recorder.RecordRouteRejection(route, "ExternalCertificateSecretDeleted", msg)
@@ -214,6 +214,6 @@ func hasExternalCertificate(route *routev1.Route) bool {
 // must be called after hasExternalCertificate
 func getReferencedSecret(route *routev1.Route) string {
 	secretName := route.Spec.TLS.ExternalCertificate.Name
-	klog.Info("Referenced secretName: ", secretName)
+	log.V(10).Info("referenced externalCertificate", "secret", secretName)
 	return secretName
 }

@@ -20,7 +20,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"k8s.io/apimachinery/pkg/util/sets"
-	"k8s.io/klog/v2"
 
 	routev1 "github.com/openshift/api/route/v1"
 	"github.com/openshift/library-go/pkg/route/secretmanager"
@@ -1120,10 +1119,9 @@ func (r *templateRouter) RemoveRoute(route *routev1.Route) {
 
 	r.removeRouteInternal(route)
 
-	// TODO: do we need to unregister here also?
 	if r.secretManager != nil && r.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
 		if err := r.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
-			klog.Error("failed to unregister route", err)
+			log.Error(err, "failed to unregister route")
 		}
 	}
 }

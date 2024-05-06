@@ -27,6 +27,7 @@ import (
 
 const (
 	// routerServiceAccount is used to validate RBAC permissions for externalCertificate
+	// TODO: avoid hard coding the serviceaccount name, and instead use environment variable, may be through cluster-ingress-operator.
 	routerServiceAccount = "system:serviceaccount:openshift-ingress:router"
 )
 
@@ -406,7 +407,7 @@ func UpgradeRouteValidation(route *routev1.Route) field.ErrorList {
 	return nil
 }
 
-// validateTLSExternalCertificate tests different pre-conditions required for
+// ValidateTLSExternalCertificate tests different pre-conditions required for
 // using externalCertificate.
 func ValidateTLSExternalCertificate(route *routev1.Route, fldPath *field.Path, sarc authorizationclient.SubjectAccessReviewInterface, secretsGetter corev1client.SecretsGetter) field.ErrorList {
 	tls := route.Spec.TLS
