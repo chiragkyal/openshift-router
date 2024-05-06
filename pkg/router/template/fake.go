@@ -8,13 +8,12 @@ import (
 // backed by a fake cert writer for testing
 func NewFakeTemplateRouter() *templateRouter {
 	fakeCertManager, _ := newSimpleCertificateManager(newFakeCertificateManagerConfig(), &fakeCertWriter{})
-	fakeSecretManager := &fakesm.SecretManager{}
 	return &templateRouter{
 		state:                     map[ServiceAliasConfigKey]ServiceAliasConfig{},
 		serviceUnits:              make(map[ServiceUnitKey]ServiceUnit),
 		certManager:               fakeCertManager,
 		rateLimitedCommitFunction: nil,
-		secretManager:             fakeSecretManager,
+		secretManager:             &fakesm.SecretManager{},
 	}
 }
 
