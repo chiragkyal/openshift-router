@@ -120,20 +120,22 @@ func (p *RouteSecretManager) validateAndRegister(route *routev1.Route) error {
 	}
 
 	// register route with secretManager
-	secreth := p.generateSecretHandler(route)
-	if err := p.secretManager.RegisterRoute(context.TODO(), route.Namespace, route.Name, getReferencedSecret(route), secreth); err != nil {
+	handler := p.generateSecretHandler(route)
+	if err := p.secretManager.RegisterRoute(context.TODO(), route.Namespace, route.Name, route.Spec.TLS.ExternalCertificate.Name, handler); err != nil {
 		log.Error(err, "failed to register route")
 		return err
 	}
 	// read referenced secret
 	secret, err := p.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
 	if err != nil {
-		log.Error(err, "failed to read referenced secret")
+		log.Error(err, "failed to get referenced secret")
 		return err
 	}
-	// update tls.Certificate and tls.Key
-	// since externalCertificate will not contain CACertificate, tls.CACertificate won't be updated.
-	// NOTE: this will be in-memory change and won't update actual route resource.
+
+	// Update the tls.Certificate and tls.Key fields of the route with the data from the referenced secret.
+	// Since externalCertificate does not contain the CACertificate, tls.CACertificate will not be updated.
+	// NOTE that this update is only performed in-memory and will not reflect in the actual route resource stored in etcd, because
+	// the router does not make kube-client calls to directly update route resources.
 	route.Spec.TLS.Certificate = string(secret.Data["tls.crt"])
 	route.Spec.TLS.Key = string(secret.Data["tls.key"])
 
@@ -148,12 +150,16 @@ func (p *RouteSecretManager) validateAndRegister(route *routev1.Route) error {
 // DeleteFunc: Invoked when the secret is deleted. It unregisters the associated route, records the route rejection, and triggers the deletion of the route by calling the HandleRoute method with a watch.Deleted event.
 func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.ResourceEventHandlerFuncs {
 	// secret handler
-	secreth := cache.ResourceEventHandlerFuncs{
+	return cache.ResourceEventHandlerFuncs{
+
+		// AddFunc is intentionally left empty (only logs the event) because this handler is generated only after ensuring the existence of the secret.
+		// By leaving this empty, we prevent unnecessary triggering for the addition of the secret again. Additionally, GetSecret() method is called
+		// immediately after registering with the secretManager, to read the secret from the cache.
 		AddFunc: func(obj interface{}) {
 			secret := obj.(*kapi.Secret)
 			log.V(4).Info("secret added for route", "namespace", route.Namespace, "secret", secret.Name, "route", route.Name)
-			// Do nothing for add event
 		},
+
 		UpdateFunc: func(old interface{}, new interface{}) {
 			secretOld := old.(*kapi.Secret)
 			secretNew := new.(*kapi.Secret)
@@ -171,8 +177,8 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 			// read referenced secret (updated data)
 			secret, err := p.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
 			if err != nil {
-				log.Error(err, "failed to read referenced secret")
-				p.recorder.RecordRouteRejection(route, "ExternalCertificateReadFailed", err.Error())
+				log.Error(err, "failed to get referenced secret")
+				p.recorder.RecordRouteRejection(route, "ExternalCertificateGetFailed", err.Error())
 				p.plugin.HandleRoute(watch.Deleted, route)
 				return
 			}
@@ -186,6 +192,7 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 			// commit the changes
 			p.plugin.Commit()
 		},
+
 		DeleteFunc: func(obj interface{}) {
 			secret := obj.(*kapi.Secret)
 			msg := fmt.Sprintf("secret %s deleted for route %s/%s", secret.Name, route.Namespace, route.Name)
@@ -200,20 +207,9 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 			p.plugin.HandleRoute(watch.Deleted, route)
 		},
 	}
-	return secreth
 }
 
 func hasExternalCertificate(route *routev1.Route) bool {
 	tls := route.Spec.TLS
-	if tls != nil && tls.ExternalCertificate != nil && len(tls.ExternalCertificate.Name) > 0 {
-		return true
-	}
-	return false
-}
-
-// must be called after hasExternalCertificate
-func getReferencedSecret(route *routev1.Route) string {
-	secretName := route.Spec.TLS.ExternalCertificate.Name
-	log.V(10).Info("referenced externalCertificate", "secret", secretName)
-	return secretName
+	return tls != nil && tls.ExternalCertificate != nil && len(tls.ExternalCertificate.Name) > 0
 }

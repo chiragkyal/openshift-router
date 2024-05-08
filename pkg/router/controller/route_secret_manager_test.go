@@ -19,7 +19,6 @@ import (
 	testclient "k8s.io/client-go/kubernetes/fake"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog/v2"
 )
 
 type testSARCreator struct {
@@ -47,18 +46,17 @@ func (t *testSecretGetter) Secrets(_ string) corev1client.SecretInterface {
 }
 
 // fakeSecretInformer will list/watch only one secret inside a namespace
-func fakeSecretInformer(ctx context.Context, fakeKubeClient *testclient.Clientset, namespace, name string) cache.SharedInformer {
+func fakeSecretInformer(fakeKubeClient *testclient.Clientset, namespace, name string) cache.SharedInformer {
 	fieldSelector := fields.OneTermEqualSelector("metadata.name", name).String()
-	klog.Info(fieldSelector)
 	return cache.NewSharedInformer(
 		&cache.ListWatch{
 			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 				options.FieldSelector = fieldSelector
-				return fakeKubeClient.CoreV1().Secrets(namespace).List(ctx, options)
+				return fakeKubeClient.CoreV1().Secrets(namespace).List(context.TODO(), options)
 			},
 			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 				options.FieldSelector = fieldSelector
-				return fakeKubeClient.CoreV1().Secrets(namespace).Watch(ctx, options)
+				return fakeKubeClient.CoreV1().Secrets(namespace).Watch(context.TODO(), options)
 			},
 		},
 		&corev1.Secret{},
@@ -77,30 +75,28 @@ func fakeSecret(namespace, name string, secretType corev1.SecretType, data map[s
 	}
 }
 
-type fakePluginNew struct {
+type fakePluginDone struct {
 	t      watch.EventType
 	route  *routev1.Route
 	err    error
-	stopCh chan struct{}
+	doneCh chan struct{}
 }
 
-func (p *fakePluginNew) HandleRoute(t watch.EventType, route *routev1.Route) error {
-	defer close(p.stopCh)
+func (p *fakePluginDone) HandleRoute(t watch.EventType, route *routev1.Route) error {
+	defer close(p.doneCh)
 	p.t, p.route = t, route
 	return p.err
 }
-
-func (p *fakePluginNew) HandleNode(t watch.EventType, node *corev1.Node) error {
+func (p *fakePluginDone) HandleNode(t watch.EventType, node *corev1.Node) error {
 	return fmt.Errorf("not expected")
 }
-
-func (p *fakePluginNew) HandleEndpoints(watch.EventType, *corev1.Endpoints) error {
+func (p *fakePluginDone) HandleEndpoints(watch.EventType, *corev1.Endpoints) error {
 	return fmt.Errorf("not expected")
 }
-func (p *fakePluginNew) HandleNamespaces(namespaces sets.String) error {
+func (p *fakePluginDone) HandleNamespaces(namespaces sets.String) error {
 	return fmt.Errorf("not expected")
 }
-func (p *fakePluginNew) Commit() error {
+func (p *fakePluginDone) Commit() error {
 	return p.err
 }
 
@@ -117,27 +113,7 @@ func TestRouteSecretManager(t *testing.T) {
 		expectedRejections map[string]string
 		expectedError      bool
 	}{
-		{
-			name: "route added without externalCertificate",
-			route: &routev1.Route{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "route-test",
-					Namespace: "sandbox",
-				},
-				Spec: routev1.RouteSpec{},
-			},
-			eventType: watch.Added,
-			expectedRoute: &routev1.Route{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "route-test",
-					Namespace: "sandbox",
-				},
-				Spec: routev1.RouteSpec{},
-			},
-			expectedEventType:  watch.Added,
-			expectedRejections: map[string]string{},
-			expectedError:      false,
-		},
+		// scenarios when route is added
 		{
 			name: "route added with externalCertificate denied",
 			route: &routev1.Route{
@@ -256,6 +232,32 @@ func TestRouteSecretManager(t *testing.T) {
 			expectedError: true,
 		},
 		{
+			name: "route added with externalCertificate allowed and correct secret but got error from secretManager",
+			route: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "tls-secret",
+						},
+					},
+				},
+			},
+			secretManager: fake.SecretManager{
+				Secret: fakeSecret("sandbox", "tls-secret", corev1.SecretTypeTLS, map[string][]byte{
+					"tls.crt": []byte("my-crt"),
+					"tls.key": []byte("my-key"),
+				}),
+				Err: fmt.Errorf("something"),
+			},
+			eventType:     watch.Added,
+			allow:         true,
+			expectedError: true,
+		},
+		{
 			name: "route added with externalCertificate allowed and correct secret",
 			route: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
@@ -293,39 +295,10 @@ func TestRouteSecretManager(t *testing.T) {
 					},
 				},
 			},
-			expectedEventType:  watch.Added,
-			expectedRejections: map[string]string{},
-			expectedError:      false,
+			expectedEventType: watch.Added,
 		},
 		{
-			name: "route added with externalCertificate allowed and correct secret but got error from secretManager",
-			route: &routev1.Route{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "route-test",
-					Namespace: "sandbox",
-				},
-				Spec: routev1.RouteSpec{
-					TLS: &routev1.TLSConfig{
-						ExternalCertificate: &routev1.LocalObjectReference{
-							Name: "tls-secret",
-						},
-					},
-				},
-			},
-			secretManager: fake.SecretManager{
-				Secret: fakeSecret("sandbox", "tls-secret", corev1.SecretTypeTLS, map[string][]byte{
-					"tls.crt": []byte("my-crt"),
-					"tls.key": []byte("my-key"),
-				}),
-				Err: fmt.Errorf("something"),
-			},
-			eventType:          watch.Added,
-			allow:              true,
-			expectedRejections: map[string]string{},
-			expectedError:      true,
-		},
-		{
-			name: "route updated: old route without externalCertificate, new route without externalCertificate",
+			name: "route added without externalCertificate",
 			route: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "route-test",
@@ -333,10 +306,7 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 				Spec: routev1.RouteSpec{},
 			},
-			secretManager: fake.SecretManager{
-				IsRegistered: false,
-			},
-			eventType: watch.Modified,
+			eventType: watch.Added,
 			expectedRoute: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "route-test",
@@ -344,34 +314,10 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 				Spec: routev1.RouteSpec{},
 			},
-			expectedEventType:  watch.Modified,
-			expectedRejections: map[string]string{},
-			expectedError:      false,
+			expectedEventType: watch.Added,
 		},
-		{
-			name: "route updated: old route with externalCertificate, new route without externalCertificate",
-			route: &routev1.Route{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "route-test",
-					Namespace: "sandbox",
-				},
-				Spec: routev1.RouteSpec{},
-			},
-			secretManager: fake.SecretManager{
-				IsRegistered: true,
-			},
-			eventType: watch.Modified,
-			expectedRoute: &routev1.Route{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "route-test",
-					Namespace: "sandbox",
-				},
-				Spec: routev1.RouteSpec{},
-			},
-			expectedEventType:  watch.Modified,
-			expectedRejections: map[string]string{},
-			expectedError:      false,
-		},
+
+		// scenarios when route is updated (old route without externalCertificate, new route with externalCertificate)
 		{
 			name: "route updated: old route without externalCertificate, new route with externalCertificate denied",
 			route: &routev1.Route{
@@ -502,6 +448,33 @@ func TestRouteSecretManager(t *testing.T) {
 			expectedError: true,
 		},
 		{
+			name: "route updated: old route without externalCertificate, new route with externalCertificate allowed and correct secret but got error from secretManager",
+			route: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "tls-secret",
+						},
+					},
+				},
+			},
+			secretManager: fake.SecretManager{
+				Secret: fakeSecret("sandbox", "tls-secret", corev1.SecretTypeTLS, map[string][]byte{
+					"tls.crt": []byte("my-crt"),
+					"tls.key": []byte("my-key"),
+				}),
+				IsRegistered: false,
+				Err:          fmt.Errorf("something"),
+			},
+			allow:         true,
+			eventType:     watch.Modified,
+			expectedError: true,
+		},
+		{
 			name: "route updated: old route without externalCertificate, new route with externalCertificate allowed and correct secret",
 			route: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
@@ -540,38 +513,10 @@ func TestRouteSecretManager(t *testing.T) {
 					},
 				},
 			},
-			expectedEventType:  watch.Modified,
-			expectedRejections: map[string]string{},
-			expectedError:      false,
+			expectedEventType: watch.Modified,
 		},
-		{
-			name: "route updated: old route without externalCertificate, new route with externalCertificate allowed and correct secret but got error from secretManager",
-			route: &routev1.Route{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "route-test",
-					Namespace: "sandbox",
-				},
-				Spec: routev1.RouteSpec{
-					TLS: &routev1.TLSConfig{
-						ExternalCertificate: &routev1.LocalObjectReference{
-							Name: "tls-secret",
-						},
-					},
-				},
-			},
-			secretManager: fake.SecretManager{
-				Secret: fakeSecret("sandbox", "tls-secret", corev1.SecretTypeTLS, map[string][]byte{
-					"tls.crt": []byte("my-crt"),
-					"tls.key": []byte("my-key"),
-				}),
-				IsRegistered: false,
-				Err:          fmt.Errorf("something"),
-			},
-			allow:              true,
-			eventType:          watch.Modified,
-			expectedRejections: map[string]string{},
-			expectedError:      true,
-		},
+
+		// scenarios when route is updated (old route with externalCertificate, new route with externalCertificate)
 		{
 			name: "route updated: old route with externalCertificate, new route with externalCertificate denied",
 			route: &routev1.Route{
@@ -702,6 +647,33 @@ func TestRouteSecretManager(t *testing.T) {
 			expectedError: true,
 		},
 		{
+			name: "route updated: old route with externalCertificate, new route with externalCertificate allowed and correct secret but got error from secretManager",
+			route: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "tls-secret",
+						},
+					},
+				},
+			},
+			secretManager: fake.SecretManager{
+				Secret: fakeSecret("sandbox", "tls-secret", corev1.SecretTypeTLS, map[string][]byte{
+					"tls.crt": []byte("my-crt"),
+					"tls.key": []byte("my-key"),
+				}),
+				IsRegistered: true,
+				Err:          fmt.Errorf("something"),
+			},
+			allow:         true,
+			eventType:     watch.Modified,
+			expectedError: true,
+		},
+		{
 			name: "route updated: old route with externalCertificate, new route with externalCertificate allowed and correct secret",
 			route: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
@@ -740,38 +712,74 @@ func TestRouteSecretManager(t *testing.T) {
 					},
 				},
 			},
-			expectedEventType:  watch.Modified,
-			expectedRejections: map[string]string{},
-			expectedError:      false,
+			expectedEventType: watch.Modified,
 		},
+
+		// scenarios when route is updated (old route with externalCertificate, new route without externalCertificate)
 		{
-			name: "route updated: old route with externalCertificate, new route with externalCertificate allowed and correct secret but got error from secretManager",
+			name: "route updated: old route with externalCertificate, new route without externalCertificate but got error from secretManager",
 			route: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "route-test",
 					Namespace: "sandbox",
 				},
-				Spec: routev1.RouteSpec{
-					TLS: &routev1.TLSConfig{
-						ExternalCertificate: &routev1.LocalObjectReference{
-							Name: "tls-secret",
-						},
-					},
-				},
+				Spec: routev1.RouteSpec{},
 			},
 			secretManager: fake.SecretManager{
-				Secret: fakeSecret("sandbox", "tls-secret", corev1.SecretTypeTLS, map[string][]byte{
-					"tls.crt": []byte("my-crt"),
-					"tls.key": []byte("my-key"),
-				}),
 				IsRegistered: true,
 				Err:          fmt.Errorf("something"),
 			},
-			allow:              true,
-			eventType:          watch.Modified,
-			expectedRejections: map[string]string{},
-			expectedError:      true,
+			eventType:     watch.Modified,
+			expectedError: true,
 		},
+		{
+			name: "route updated: old route with externalCertificate, new route without externalCertificate: works",
+			route: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{},
+			},
+			secretManager: fake.SecretManager{
+				IsRegistered: true,
+			},
+			eventType: watch.Modified,
+			expectedRoute: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{},
+			},
+			expectedEventType: watch.Modified,
+		},
+
+		// scenario when route is updated (old route without externalCertificate, new route without externalCertificate)
+		{
+			name: "route updated: old route without externalCertificate, new route without externalCertificate",
+			route: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{},
+			},
+			secretManager: fake.SecretManager{
+				IsRegistered: false,
+			},
+			eventType: watch.Modified,
+			expectedRoute: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{},
+			},
+			expectedEventType: watch.Modified,
+		},
+
+		// scenarios when route is deleted
 		{
 			name: "route deleted without externalCertificate registered",
 			route: &routev1.Route{
@@ -790,9 +798,7 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 				Spec: routev1.RouteSpec{},
 			},
-			expectedEventType:  watch.Deleted,
-			expectedRejections: map[string]string{},
-			expectedError:      false,
+			expectedEventType: watch.Deleted,
 		},
 		{
 			name: "route deleted with externalCertificate registered",
@@ -824,9 +830,7 @@ func TestRouteSecretManager(t *testing.T) {
 					},
 				},
 			},
-			expectedEventType:  watch.Deleted,
-			expectedRejections: map[string]string{},
-			expectedError:      false,
+			expectedEventType: watch.Deleted,
 		},
 		{
 			name: "route deleted with externalCertificate registered, but got error from secretManager",
@@ -843,10 +847,9 @@ func TestRouteSecretManager(t *testing.T) {
 					},
 				},
 			},
-			secretManager:      fake.SecretManager{IsRegistered: true, Err: fmt.Errorf("something")},
-			eventType:          watch.Deleted,
-			expectedRejections: map[string]string{},
-			expectedError:      true,
+			secretManager: fake.SecretManager{IsRegistered: true, Err: fmt.Errorf("something")},
+			eventType:     watch.Deleted,
+			expectedError: true,
 		},
 	}
 
@@ -854,6 +857,11 @@ func TestRouteSecretManager(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			p := &fakePlugin{}
 			recorder := routeStatusRecorder{rejections: make(map[string]string)}
+
+			// assign default value to expectedRejections
+			if s.expectedRejections == nil {
+				s.expectedRejections = map[string]string{}
+			}
 			rsm := NewRouteSecretManager(p, recorder, &s.secretManager, &testSecretGetter{namespace: s.route.Namespace, secret: s.secretManager.Secret}, &testSARCreator{allow: s.allow})
 
 			gotErr := rsm.HandleRoute(s.eventType, s.route)
@@ -963,7 +971,7 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 			},
 			expectedEventType: watch.Deleted,
 			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateReadFailed",
+				"sandbox-route-test": "ExternalCertificateGetFailed",
 			},
 		},
 		{
@@ -1093,37 +1101,38 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 		t.Run(s.name, func(t *testing.T) {
 			oldSecret := fakeSecret("sandbox", "tls-secret", corev1.SecretTypeTLS, map[string][]byte{})
 			kubeClient := testclient.NewSimpleClientset(oldSecret)
-			informer := fakeSecretInformer(context.TODO(), kubeClient, "sandbox", "tls-secret")
+			informer := fakeSecretInformer(kubeClient, "sandbox", "tls-secret")
 			go informer.Run(context.TODO().Done())
 
-			p := &fakePluginNew{
-				stopCh: make(chan struct{}),
-			}
-			recorder := routeStatusRecorder{rejections: make(map[string]string)}
-			rsm := NewRouteSecretManager(p, recorder, &s.secretManager, &testSecretGetter{namespace: s.route.Namespace, secret: oldSecret}, &testSARCreator{allow: s.allow})
-
-			if _, err := informer.AddEventHandler(rsm.generateSecretHandler(s.route)); err != nil {
-				t.Fatal("failed to add handler", err)
-			}
 			// wait for informer to start
 			if !cache.WaitForCacheSync(context.TODO().Done(), informer.HasSynced) {
 				t.Fatal("cache not synced yet")
 			}
 
+			p := &fakePluginDone{
+				doneCh: make(chan struct{}),
+			}
+			recorder := routeStatusRecorder{rejections: make(map[string]string)}
+			rsm := NewRouteSecretManager(p, recorder, &s.secretManager, &testSecretGetter{namespace: s.route.Namespace, secret: oldSecret}, &testSARCreator{allow: s.allow})
+
+			if _, err := informer.AddEventHandler(rsm.generateSecretHandler(s.route)); err != nil {
+				t.Fatalf("failed to add handler: %v", err)
+			}
+
 			if s.deleteSecret {
 				// delete the secret
 				if err := kubeClient.CoreV1().Secrets(s.route.Namespace).Delete(context.TODO(), s.secretManager.Secret.Name, metav1.DeleteOptions{}); err != nil {
-					t.Fatal("failed to delete secret", err)
+					t.Fatalf("failed to delete secret: %v", err)
 				}
 
 			} else {
 				// update the secret
 				if _, err := kubeClient.CoreV1().Secrets(s.route.Namespace).Update(context.TODO(), s.secretManager.Secret, metav1.UpdateOptions{}); err != nil {
-					t.Fatal("failed to update secret", err)
+					t.Fatalf("failed to update secret: %v", err)
 				}
 			}
 			// wait until p.plugin.HandleRoute() completes (required to handle race condition)
-			<-p.stopCh
+			<-p.doneCh
 
 			if !reflect.DeepEqual(s.expectedRoute, p.route) {
 				t.Fatalf("expected route for next plugin %v, but got %v", s.expectedRoute, p.route)
