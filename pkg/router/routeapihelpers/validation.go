@@ -449,7 +449,7 @@ func ValidateTLSExternalCertificate(route *routev1.Route, fldPath *field.Path, s
 	secret, err := secretsGetter.Secrets(route.Namespace).Get(context.TODO(), tls.ExternalCertificate.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return append(errs, field.NotFound(fldPath, err))
+			return append(errs, field.NotFound(fldPath, err.Error()))
 		}
 		return append(errs, field.InternalError(fldPath, err))
 	}
