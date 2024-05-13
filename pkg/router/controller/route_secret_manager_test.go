@@ -76,15 +76,15 @@ func fakeSecret(namespace, name string, secretType corev1.SecretType, data map[s
 }
 
 type fakePluginDone struct {
-	t      watch.EventType
-	route  *routev1.Route
-	err    error
-	doneCh chan struct{}
+	eventType watch.EventType
+	route     *routev1.Route
+	err       error
+	doneCh    chan struct{}
 }
 
-func (p *fakePluginDone) HandleRoute(t watch.EventType, route *routev1.Route) error {
+func (p *fakePluginDone) HandleRoute(eventType watch.EventType, route *routev1.Route) error {
 	defer close(p.doneCh)
-	p.t, p.route = t, route
+	p.eventType, p.route = eventType, route
 	return p.err
 }
 func (p *fakePluginDone) HandleNode(t watch.EventType, node *corev1.Node) error {
@@ -1137,8 +1137,8 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 			if !reflect.DeepEqual(s.expectedRoute, p.route) {
 				t.Fatalf("expected route for next plugin %v, but got %v", s.expectedRoute, p.route)
 			}
-			if s.expectedEventType != p.t {
-				t.Fatalf("expected %s event for next plugin, but got %s", s.expectedEventType, p.t)
+			if s.expectedEventType != p.eventType {
+				t.Fatalf("expected %s event for next plugin, but got %s", s.expectedEventType, p.eventType)
 			}
 			if !reflect.DeepEqual(s.expectedRejections, recorder.rejections) {
 				t.Fatalf("expected rejections %v, but got %v", s.expectedRejections, recorder.rejections)
