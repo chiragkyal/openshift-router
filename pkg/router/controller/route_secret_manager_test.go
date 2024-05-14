@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/openshift/library-go/pkg/route/secretmanager/fake"
+	"github.com/openshift/router/pkg/router"
 
 	routev1 "github.com/openshift/api/route/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -99,6 +100,8 @@ func (p *fakePluginDone) HandleNamespaces(namespaces sets.String) error {
 func (p *fakePluginDone) Commit() error {
 	return p.err
 }
+
+var _ router.Plugin = &fakePluginDone{}
 
 func TestRouteSecretManager(t *testing.T) {
 
