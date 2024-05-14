@@ -76,6 +76,14 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 			}
 		}
 
+	// For Modified events always unregister and reregister the route even if the TLS configuration did not change.
+	// Since the `HandleRoute()` method does not carry the old route spec,
+	// and there's no definite way to compare old and new TLS configurations,
+	// assume that the TLS configuration is always updated, necessitating re-registration.
+	// Additionally, always creating a new `secretHandler` ensures that there are no stale route specs
+	// in the next plugin chain, especially when the referenced secret is updated or deleted.
+	// This prevents sending outdated routes to subsequent plugins, preserving expected functionality.
+	// TODO: Refer https://github.com/openshift/router/pull/565#discussion_r1596441128 for possible ways to improve the logic.
 	case watch.Modified:
 		// unregister associated secret monitor, if registered
 		if p.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
