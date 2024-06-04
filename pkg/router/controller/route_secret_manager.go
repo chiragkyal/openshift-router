@@ -27,18 +27,18 @@ type RouteSecretManager struct {
 	recorder RouteStatusRecorder
 
 	secretManager secretmanager.SecretManager
-	secretsGetter corev1client.SecretsGetter
+	secretsClient corev1client.SecretsGetter
 	sarClient     authorizationclient.SubjectAccessReviewInterface
 }
 
 // NewRouteSecretManager creates a new instance of RouteSecretManager.
 // It wraps the provided plugin and adds secret management capabilities.
-func NewRouteSecretManager(plugin router.Plugin, recorder RouteStatusRecorder, secretManager secretmanager.SecretManager, secretsGetter corev1client.SecretsGetter, sarClient authorizationclient.SubjectAccessReviewInterface) *RouteSecretManager {
+func NewRouteSecretManager(plugin router.Plugin, recorder RouteStatusRecorder, secretManager secretmanager.SecretManager, secretsClient corev1client.SecretsGetter, sarClient authorizationclient.SubjectAccessReviewInterface) *RouteSecretManager {
 	return &RouteSecretManager{
 		plugin:        plugin,
 		recorder:      recorder,
 		secretManager: secretManager,
-		secretsGetter: secretsGetter,
+		secretsClient: secretsClient,
 		sarClient:     sarClient,
 	}
 }
@@ -64,6 +64,8 @@ func (p *RouteSecretManager) Commit() error {
 // For Modified events, it first unregisters the route if it's already registered and then revalidates and registers it again.
 // For Deleted events, it unregisters the route if it's registered.
 // Additionally, it delegates the handling of the event to the next plugin in the chain after performing the necessary actions.
+
+// Finalizer will be removed only when route is deleted or externalCertificate is removed
 func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *routev1.Route) error {
 	log.V(10).Info("HandleRoute: RouteSecretManager", "eventType", eventType)
 
@@ -84,11 +86,18 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 	// in the next plugin chain, especially when the referenced secret is updated or deleted.
 	// This prevents sending outdated routes to subsequent plugins, preserving expected functionality.
 	// TODO: Refer https://github.com/openshift/router/pull/565#discussion_r1596441128 for possible ways to improve the logic.
+	//
 	case watch.Modified:
-		// unregister associated secret monitor, if registered
-		if p.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
+		// unregister associated secret monitor, if registered and remove finalizer
+		// always unregister first and then remove the finalizer to avoid triggering of DeleteFunc if deletionTimestamp is set
+		if registeredSecret, isRegistered := p.secretManager.LookupRouteSecret(route.Namespace, route.Name); isRegistered {
 			if err := p.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
 				log.Error(err, "failed to unregister route")
+				return err
+			}
+			// remove finalizer
+			if err := routeapihelpers.RemoveFinalizer(context.TODO(), p.secretsClient, route.Namespace, registeredSecret, generateFinalizerName(route)); err != nil {
+				log.Error(err, "failed to remove finalizer", "namespace", route.Namespace, "secret", registeredSecret, "route", route.Name, "finalizer", generateFinalizerName(route))
 				return err
 			}
 		}
@@ -100,10 +109,15 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 		}
 
 	case watch.Deleted:
-		// unregister associated secret monitor, if registered
-		if p.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
+		// unregister associated secret monitor, if registered and remove finalizer
+		if registeredSecret, isRegistered := p.secretManager.LookupRouteSecret(route.Namespace, route.Name); isRegistered {
 			if err := p.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
 				log.Error(err, "failed to unregister route")
+				return err
+			}
+			// remove finalizer
+			if err := routeapihelpers.RemoveFinalizer(context.TODO(), p.secretsClient, route.Namespace, registeredSecret, generateFinalizerName(route)); err != nil {
+				log.Error(err, "failed to remove finalizer", "namespace", route.Namespace, "secret", registeredSecret, "route", route.Name, "finalizer", generateFinalizerName(route))
 				return err
 			}
 		}
@@ -117,10 +131,11 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 
 // validateAndRegister validates the route's externalCertificate configuration and registers it with the secret manager.
 // It also updates the in-memory TLS certificate and key after reading from secret informer's cache.
+// add finalizer
 func (p *RouteSecretManager) validateAndRegister(route *routev1.Route) error {
 	fldPath := field.NewPath("spec").Child("tls").Child("externalCertificate")
 	// validate
-	if err := routeapihelpers.ValidateTLSExternalCertificate(route, fldPath, p.sarClient, p.secretsGetter).ToAggregate(); err != nil {
+	if err := routeapihelpers.ValidateTLSExternalCertificate(route, fldPath, p.sarClient, p.secretsClient).ToAggregate(); err != nil {
 		log.Error(err, "skipping route due to invalid externalCertificate configuration", "namespace", route.Namespace, "route", route.Name)
 		p.recorder.RecordRouteRejection(route, "ExternalCertificateValidationFailed", err.Error())
 		p.plugin.HandleRoute(watch.Deleted, route)
@@ -133,6 +148,13 @@ func (p *RouteSecretManager) validateAndRegister(route *routev1.Route) error {
 		log.Error(err, "failed to register route")
 		return err
 	}
+
+	// add finalizer to prevent secret deletion
+	if err := routeapihelpers.EnsureFinalizer(context.TODO(), p.secretsClient, route.Namespace, route.Spec.TLS.ExternalCertificate.Name, generateFinalizerName(route)); err != nil {
+		log.Error(err, "failed to add finalizer", "namespace", route.Namespace, "secret", route.Spec.TLS.ExternalCertificate.Name, "route", route.Name, "finalizer", generateFinalizerName(route))
+		return err
+	}
+
 	// read referenced secret
 	secret, err := p.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
 	if err != nil {
@@ -168,14 +190,29 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 			log.V(4).Info("secret added for route", "namespace", route.Namespace, "secret", secret.Name, "route", route.Name)
 		},
 
+		// If secret is updated, but route is rejected due to some error, users can update the secret again to make the route active.
+		// secret monitor and finalizers will remain intact in this case.
 		UpdateFunc: func(old interface{}, new interface{}) {
 			secretOld := old.(*kapi.Secret)
 			secretNew := new.(*kapi.Secret)
+
+			// when secret is marked for deletion without unregistering from secretManager
+			if secretNew.DeletionTimestamp != nil {
+				log.Info("secret's DeletionTimestamp is set", "namespace", route.Namespace, "secret", secretNew.Name, "old-version", secretOld.ResourceVersion, "new-version", secretNew.ResourceVersion, "route", route.Name)
+			}
+
+			// Compare tls.crt and tls.key fields. No-op if unchanged.
+			if string(secretOld.Data["tls.crt"]) == string(secretNew.Data["tls.crt"]) &&
+				string(secretOld.Data["tls.key"]) == string(secretNew.Data["tls.key"]) {
+				log.V(4).Info("secret data unchanged for route", "namespace", route.Namespace, "secret", secretNew.Name, "old-version", secretOld.ResourceVersion, "new-version", secretNew.ResourceVersion, "route", route.Name)
+				return
+			}
+
 			log.V(4).Info("secret updated for route", "namespace", route.Namespace, "secret", secretNew.Name, "old-version", secretOld.ResourceVersion, "new-version", secretNew.ResourceVersion, "route", route.Name)
 
 			// re-validate
 			fldPath := field.NewPath("spec").Child("tls").Child("externalCertificate")
-			if err := routeapihelpers.ValidateTLSExternalCertificate(route, fldPath, p.sarClient, p.secretsGetter).ToAggregate(); err != nil {
+			if err := routeapihelpers.ValidateTLSExternalCertificate(route, fldPath, p.sarClient, p.secretsClient).ToAggregate(); err != nil {
 				log.Error(err, "skipping route due to invalid externalCertificate configuration", "namespace", route.Namespace, "route", route.Name)
 				p.recorder.RecordRouteRejection(route, "ExternalCertificateValidationFailed", err.Error())
 				p.plugin.HandleRoute(watch.Deleted, route)
@@ -183,6 +220,7 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 			}
 
 			// read referenced secret (updated data)
+			// TODO: can not we directly use secretNew ?
 			secret, err := p.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
 			if err != nil {
 				log.Error(err, "failed to get referenced secret")
@@ -201,15 +239,20 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 			p.plugin.Commit()
 		},
 
+		// finalizers will prevent secret deletion, however if secret is forcefully deleted (after manually removing finalizers)
+		// then the route will be rejected, and re-creation of the secret will not help the route to become active automatically.
+		// Need manual intervension to make the route active.
 		DeleteFunc: func(obj interface{}) {
 			secret := obj.(*kapi.Secret)
-			msg := fmt.Sprintf("secret %s deleted for route %s/%s", secret.Name, route.Namespace, route.Name)
+			msg := fmt.Sprintf("secret %s forcefully deleted for route %s/%s", secret.Name, route.Namespace, route.Name)
 			log.V(4).Info(msg)
 
 			// unregister associated secret monitor
 			if err := p.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
 				log.Error(err, "failed to unregister route")
 			}
+
+			// secret is already deleted, so no need to remove the finalizers
 
 			p.recorder.RecordRouteRejection(route, "ExternalCertificateSecretDeleted", msg)
 			p.plugin.HandleRoute(watch.Deleted, route)
@@ -220,4 +263,10 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 func hasExternalCertificate(route *routev1.Route) bool {
 	tls := route.Spec.TLS
 	return tls != nil && tls.ExternalCertificate != nil && len(tls.ExternalCertificate.Name) > 0
+}
+
+// route.openshift.io/routeName
+// Note: Finalizers are namespaced
+func generateFinalizerName(route *routev1.Route) string {
+	return fmt.Sprintf("%s/%s", route.GroupVersionKind().Group, route.Name)
 }

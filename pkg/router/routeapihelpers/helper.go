@@ -37,6 +37,7 @@ func GetDomainForHost(host string) string {
 
 // EnsureFinalizer adds a finalizer to a secret if it doesn't already exist. No-op otherwise.
 // It re-tries on conflicts.
+// NOTE: New finalizer can not be added if the secret's deletionTimestamp is set, only existing finalizers can be removed. Ref: https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/
 func EnsureFinalizer(ctx context.Context, secretClient corev1client.SecretsGetter, namespace, secretName, finalizerName string) error {
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		secret, err := secretClient.Secrets(namespace).Get(ctx, secretName, metav1.GetOptions{})
