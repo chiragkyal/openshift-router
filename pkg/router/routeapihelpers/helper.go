@@ -55,7 +55,7 @@ func EnsureFinalizer(ctx context.Context, secretClient corev1client.SecretsGette
 			if err != nil {
 				return err
 			}
-			klog.V(2).Infof("Added finalizer %s to secret %s/%s : %v", finalizerName, secretName, namespace, secret.Finalizers)
+			klog.V(2).Infof("Added finalizer %s to secret %s/%s : %v", finalizerName, namespace, secretName, secret.Finalizers)
 		}
 		return nil
 	})
@@ -83,7 +83,7 @@ func RemoveFinalizer(ctx context.Context, secretClient corev1client.SecretsGette
 			if err != nil {
 				return err
 			}
-			klog.V(2).Infof("Removed finalizer %s from secret %s/%s : %v", finalizerName, secretName, namespace, secret.Finalizers)
+			klog.V(2).Infof("Removed finalizer %s from secret %s/%s : %v", finalizerName, namespace, secretName, secret.Finalizers)
 		}
 		return nil
 	})

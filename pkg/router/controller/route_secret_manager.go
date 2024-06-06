@@ -17,6 +17,10 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
+const (
+	RouteGroupName = "route.openshift.io"
+)
+
 // RouteSecretManager implements the router.Plugin interface to register
 // or unregister route with secretManger if externalCertificate is used.
 // It also reads the referenced secret to update in-memory tls.Certificate and tls.Key
@@ -268,5 +272,5 @@ func hasExternalCertificate(route *routev1.Route) bool {
 // route.openshift.io/routeName
 // Note: Finalizers are namespaced
 func generateFinalizerName(route *routev1.Route) string {
-	return fmt.Sprintf("%s/%s", route.GroupVersionKind().Group, route.Name)
+	return fmt.Sprintf("%s/%s", RouteGroupName, route.Name)
 }
