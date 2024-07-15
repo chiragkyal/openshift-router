@@ -30,9 +30,9 @@ type RouteSecretManager struct {
 	secretManager secretmanager.SecretManager
 	secretsGetter corev1client.SecretsGetter
 	sarClient     authorizationclient.SubjectAccessReviewInterface
-	// deletedSecrets tracks routes for which the associated secret was deleted (populated inside DeleteFunc)
-	// after intial creation of the secret monitor. This helps to differentiate between a new secret creation
-	// and a recreation of a previously deleted secret.
+	// deletedSecrets tracks routes for which the associated secret was deleted after intial creation of the secret monitor.
+	// This helps to differentiate between a new secret creation and a recreation of a previously deleted secret.
+	// Populated inside DeleteFunc, and consumed or cleaned inside AddFunc and unregister().
 	// It is thread safe and "namespace/routeName" is used as it's key.
 	deletedSecrets sync.Map
 }
@@ -83,31 +83,85 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 			}
 		}
 
-	// For Modified events always unregister and reregister the route even if the TLS configuration did not change.
-	// Since the `HandleRoute()` method does not carry the old route spec,
-	// and there's no definite way to compare old and new TLS configurations,
-	// assume that the TLS configuration is always updated, necessitating re-registration.
-	// Additionally, always creating a new `secretHandler` ensures that there are no stale route specs
+	// TODO always creating a new `secretHandler` ensures that there are no stale route specs
 	// in the next plugin chain, especially when the referenced secret is updated or deleted.
 	// This prevents sending outdated routes to subsequent plugins, preserving expected functionality.
-	// TODO: Refer https://github.com/openshift/router/pull/565#discussion_r1596441128 for possible ways to improve the logic.
+	// TODO : we might need to add RouteLister()
 	case watch.Modified:
-		// unregister with secret monitor
-		if err := p.unregister(route); err != nil {
-			return err
-		}
+		newHasExt := hasExternalCertificate(route)
+		oldSecret, oldHadExt := p.secretManager.LookupRouteSecret(route.Namespace, route.Name)
 
-		// register with secret monitor
-		if hasExternalCertificate(route) {
+		switch {
+		case newHasExt && oldHadExt:
+			// Both new and old routes have externalCertificate
+			log.V(4).Info("Both new and old routes have externalCertificate", "namespace", route.Namespace, "route", route.Name)
+			if oldSecret != route.Spec.TLS.ExternalCertificate.Name {
+				// ExternalCertificate is updated
+				log.V(4).Info("ExternalCertificate is updated", "namespace", route.Namespace, "route", route.Name)
+				// unregister and re-register with secret monitor
+				if err := p.unregister(route); err != nil {
+					return err
+				}
+				if err := p.validateAndRegister(route); err != nil {
+					return err
+				}
+			}
+			log.V(4).Info("ExternalCertificate is not updated", "namespace", route.Namespace, "route", route.Name)
+			// When ExternalCertificate is not updated
+			// we need to re-validate and update the secret here
+			// scenario: user deleted the secret, status updated to reject,
+			// gets re-triggered the entire plugin chain, without re-validation check and re-sync of secret here
+			// I think the route with become active again and will start serving default certificate,
+			// even if it's spec has externalCertificate
+			// it is also must to re-sync the secret because your plugin chain must do it's work of action
+
+			// re-validate
+			fldPath := field.NewPath("spec").Child("tls").Child("externalCertificate")
+			if err := routeapihelpers.ValidateTLSExternalCertificate(route, fldPath, p.sarClient, p.secretsGetter).ToAggregate(); err != nil {
+				log.Error(err, "skipping route due to invalid externalCertificate configuration", "namespace", route.Namespace, "route", route.Name)
+				p.recorder.RecordRouteRejection(route, "ExternalCertificateValidationFailed", err.Error())
+				p.plugin.HandleRoute(watch.Deleted, route)
+				return err
+			}
+
+			// read referenced secret
+			secret, err := p.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
+			if err != nil {
+				log.Error(err, "failed to get referenced secret")
+				return err
+			}
+
+			// Update the tls.Certificate and tls.Key fields of the route with the data from the referenced secret.
+			route.Spec.TLS.Certificate = string(secret.Data["tls.crt"])
+			route.Spec.TLS.Key = string(secret.Data["tls.key"])
+
+		case newHasExt && !oldHadExt:
+			// New route has externalCertificate, old route did not
+			log.V(4).Info("New route has externalCertificate, old route did not", "namespace", route.Namespace, "route", route.Name)
+			// register with secret monitor
 			if err := p.validateAndRegister(route); err != nil {
 				return err
 			}
+
+		case !newHasExt && oldHadExt:
+			// Old route had externalCertificate, new route does not
+			log.V(4).Info("Old route had externalCertificate, new route does not", "namespace", route.Namespace, "route", route.Name)
+			// unregister with secret monitor
+			if err := p.unregister(route); err != nil {
+				return err
+			}
+
+		case !newHasExt && !oldHadExt:
+			// Neither new nor old route have externalCertificate
+			// Do nothing
 		}
 
 	case watch.Deleted:
-		// unregister with secret monitor
-		if err := p.unregister(route); err != nil {
-			return err
+		// unregister associated secret monitor, if registered
+		if _, exists := p.secretManager.LookupRouteSecret(route.Namespace, route.Name); exists {
+			if err := p.unregister(route); err != nil {
+				return err
+			}
 		}
 
 	default:
@@ -261,16 +315,14 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 }
 
 func (p *RouteSecretManager) unregister(route *routev1.Route) error {
-	// unregister associated secret monitor, if registered
-	if p.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
-		if err := p.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
-			log.Error(err, "failed to unregister route")
-			return err
-		}
-		// clean the route if present inside deletedSecrets
-		// this is required for the scenario when the associated secret is deleted, before unregistering with secretManager
-		p.deletedSecrets.Delete(generateKey(route.Namespace, route.Name))
+	// unregister associated secret monitor
+	if err := p.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
+		log.Error(err, "failed to unregister route")
+		return err
 	}
+	// clean the route if present inside deletedSecrets
+	// this is required for the scenario when the associated secret is deleted, before unregistering with secretManager
+	p.deletedSecrets.Delete(generateKey(route.Namespace, route.Name))
 	return nil
 }
 
