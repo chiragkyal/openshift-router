@@ -65,7 +65,8 @@ type templateRouter struct {
 	state            map[ServiceAliasConfigKey]ServiceAliasConfig
 	serviceUnits     map[ServiceUnitKey]ServiceUnit
 	certManager      certificateManager
-	secretManager    secretmanager.SecretManager
+	// TODO remove me
+	secretManager secretmanager.SecretManager
 	// defaultCertificate is a concatenated certificate(s), their keys, and their CAs that should be used by the underlying
 	// implementation as the default certificate if no certificate is resolved by the normal matching mechanisms.  This is
 	// usually a wildcard certificate for a cloud domain such as *.mypaas.com to allow applications to create app.mypaas.com
@@ -1135,13 +1136,18 @@ func (r *templateRouter) RemoveRoute(route *routev1.Route) {
 
 	r.removeRouteInternal(route)
 
-	if r.secretManager != nil { // TODO: remove this nil check while dropping AllowExternalCertificates flag.
-		if r.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
-			if err := r.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
-				log.Error(err, "failed to unregister route")
-			}
-		}
-	}
+	// We might not want to remove informer from here, since the informer will be deleted only when the route is deleted
+	// and not when the secret itself gets deleted.
+	// TODO: Question: what if the next plugin chain rejects the route?
+	// In that case we will have the informer active, assuming the watch.Modified function inside RouteSecret plugin, we will re-sync the secret and will forward to the next plugin to re-evaluate.
+
+	// if r.secretManager != nil { // TODO: remove this nil check while dropping AllowExternalCertificates flag.
+	// 	if r.secretManager.IsRouteRegistered(route.Namespace, route.Name) {
+	// 		if err := r.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
+	// 			log.Error(err, "failed to unregister route")
+	// 		}
+	// 	}
+	// }
 }
 
 // removeRouteInternal removes the given route - internal
