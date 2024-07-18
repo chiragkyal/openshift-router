@@ -83,14 +83,10 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 			}
 		}
 
-	// For Modified events always unregister and reregister the route even if the TLS configuration did not change.
-	// Since the `HandleRoute()` method does not carry the old route spec,
-	// and there's no definite way to compare old and new TLS configurations,
-	// assume that the TLS configuration is always updated, necessitating re-registration.
-	// Additionally, always creating a new `secretHandler` ensures that there are no stale route specs
+	// TODO always creating a new `secretHandler` ensures that there are no stale route specs
 	// in the next plugin chain, especially when the referenced secret is updated or deleted.
 	// This prevents sending outdated routes to subsequent plugins, preserving expected functionality.
-	// TODO: Refer https://github.com/openshift/router/pull/565#discussion_r1596441128 for possible ways to improve the logic.
+	// TODO : we might need to add RouteLister()
 	case watch.Modified:
 		newHasExt := hasExternalCertificate(route)
 		oldSecret, oldHadExt := p.secretManager.LookupRouteSecret(route.Namespace, route.Name)
@@ -98,8 +94,10 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 		switch {
 		case newHasExt && oldHadExt:
 			// Both new and old routes have externalCertificate
+			log.V(4).Info("Both new and old routes have externalCertificate", "namespace", route.Namespace, "route", route.Name)
 			if oldSecret != route.Spec.TLS.ExternalCertificate.Name {
 				// ExternalCertificate is updated
+				log.V(4).Info("ExternalCertificate is updated", "namespace", route.Namespace, "route", route.Name)
 				// unregister and re-register with secret monitor
 				if err := p.unregister(route); err != nil {
 					return err
@@ -108,10 +106,38 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 					return err
 				}
 			}
-			// Do nothing if externalCertificate is not updated
+			log.V(4).Info("ExternalCertificate is not updated", "namespace", route.Namespace, "route", route.Name)
+			// When ExternalCertificate is not updated
+			// we need to re-validate and update the secret here
+			// scenario: user deleted the secret, status updated to reject,
+			// gets re-triggered the entire plugin chain, without re-validation check and re-sync of secret here
+			// I think the route with become active again and will start serving default certificate,
+			// even if it's spec has externalCertificate
+			// it is also must to re-sync the secret because your plugin chain must do it's work of action
+
+			// re-validate
+			fldPath := field.NewPath("spec").Child("tls").Child("externalCertificate")
+			if err := routeapihelpers.ValidateTLSExternalCertificate(route, fldPath, p.sarClient, p.secretsGetter).ToAggregate(); err != nil {
+				log.Error(err, "skipping route due to invalid externalCertificate configuration", "namespace", route.Namespace, "route", route.Name)
+				p.recorder.RecordRouteRejection(route, "ExternalCertificateValidationFailed", err.Error())
+				p.plugin.HandleRoute(watch.Deleted, route)
+				return err
+			}
+
+			// read referenced secret
+			secret, err := p.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
+			if err != nil {
+				log.Error(err, "failed to get referenced secret")
+				return err
+			}
+
+			// Update the tls.Certificate and tls.Key fields of the route with the data from the referenced secret.
+			route.Spec.TLS.Certificate = string(secret.Data["tls.crt"])
+			route.Spec.TLS.Key = string(secret.Data["tls.key"])
 
 		case newHasExt && !oldHadExt:
 			// New route has externalCertificate, old route did not
+			log.V(4).Info("New route has externalCertificate, old route did not", "namespace", route.Namespace, "route", route.Name)
 			// register with secret monitor
 			if err := p.validateAndRegister(route); err != nil {
 				return err
@@ -119,6 +145,7 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 
 		case !newHasExt && oldHadExt:
 			// Old route had externalCertificate, new route does not
+			log.V(4).Info("Old route had externalCertificate, new route does not", "namespace", route.Namespace, "route", route.Name)
 			// unregister with secret monitor
 			if err := p.unregister(route); err != nil {
 				return err
