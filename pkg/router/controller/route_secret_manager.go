@@ -67,8 +67,20 @@ func (p *RouteSecretManager) Commit() error {
 }
 
 // HandleRoute manages the registration, unregistration, and validation of routes with external certificates.
+//
 // For Added events, it validates the route's external certificate configuration and registers it with the secret manager.
-// For Modified events, it first unregisters the route if it's already registered and then revalidates and registers it again.
+//
+// For Modified events, it checks if the route's external certificate configuration has changed and takes appropriate actions:
+//  1. Both the old and new routes have an external certificate:
+//     - If the external certificate has changed, it unregisters the old one and registers the new one.
+//     - If the external certificate has not changed, it revalidates and updates the in-memory TLS certificate and key.
+//  2. The new route has an external certificate, but the old one did not:
+//     - It registers the new route with the secret manager.
+//  3. The old route had an external certificate, but the new one does not:
+//     - It unregisters the old route from the secret manager.
+//  4. Neither the old nor the new route has an external certificate:
+//     - No action is taken.
+//
 // For Deleted events, it unregisters the route if it's registered.
 // Additionally, it delegates the handling of the event to the next plugin in the chain after performing the necessary actions.
 func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *routev1.Route) error {
@@ -88,52 +100,56 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 	// This prevents sending outdated routes to subsequent plugins, preserving expected functionality.
 	// TODO : we might need to add RouteLister()
 	case watch.Modified:
+		// Determine if the route's external certificate configuration has changed
 		newHasExt := hasExternalCertificate(route)
 		oldSecret, oldHadExt := p.secretManager.LookupRouteSecret(route.Namespace, route.Name)
 
 		switch {
 		case newHasExt && oldHadExt:
 			// Both new and old routes have externalCertificate
-			log.V(4).Info("Both new and old routes have externalCertificate", "namespace", route.Namespace, "route", route.Name)
+			log.V(6).Info("Both new and old routes have externalCertificate", "namespace", route.Namespace, "route", route.Name)
 			if oldSecret != route.Spec.TLS.ExternalCertificate.Name {
 				// ExternalCertificate is updated
 				log.V(4).Info("ExternalCertificate is updated", "namespace", route.Namespace, "route", route.Name)
-				// unregister and re-register with secret monitor
+				// Unregister the old and register the new external certificate
 				if err := p.unregister(route); err != nil {
 					return err
 				}
 				if err := p.validateAndRegister(route); err != nil {
 					return err
 				}
-			}
-			log.V(4).Info("ExternalCertificate is not updated", "namespace", route.Namespace, "route", route.Name)
-			// When ExternalCertificate is not updated
-			// we need to re-validate and update the secret here
-			// scenario: user deleted the secret, status updated to reject,
-			// gets re-triggered the entire plugin chain, without re-validation check and re-sync of secret here
-			// I think the route with become active again and will start serving default certificate,
-			// even if it's spec has externalCertificate
-			// it is also must to re-sync the secret because your plugin chain must do it's work of action
+			} else {
+				// ExternalCertificate is not updated
+				// Revalidate and update the in-memory TLS certificate and key
+				// It is the responsibility of this plugin to ensure everything is synced properly.
 
-			// re-validate
-			fldPath := field.NewPath("spec").Child("tls").Child("externalCertificate")
-			if err := routeapihelpers.ValidateTLSExternalCertificate(route, fldPath, p.sarClient, p.secretsGetter).ToAggregate(); err != nil {
-				log.Error(err, "skipping route due to invalid externalCertificate configuration", "namespace", route.Namespace, "route", route.Name)
-				p.recorder.RecordRouteRejection(route, "ExternalCertificateValidationFailed", err.Error())
-				p.plugin.HandleRoute(watch.Deleted, route)
-				return err
-			}
+				// One Scenario: The user deletes the secret, causing the route's status to be updated to reject.
+				// This triggers the entire plugin chain again. Without re-validating the external certificate
+				// and re-syncing the secret here, the route could become active again and start serving
+				// the default certificate, even though its spec has an external certificate.
+				// Therefore, it is essential to re-sync the secret to ensure the plugin chain correctly handles the route.
 
-			// read referenced secret
-			secret, err := p.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
-			if err != nil {
-				log.Error(err, "failed to get referenced secret")
-				return err
-			}
+				log.V(4).Info("ExternalCertificate is not updated", "namespace", route.Namespace, "route", route.Name)
+				// re-validate
+				fldPath := field.NewPath("spec").Child("tls").Child("externalCertificate")
+				if err := routeapihelpers.ValidateTLSExternalCertificate(route, fldPath, p.sarClient, p.secretsGetter).ToAggregate(); err != nil {
+					log.Error(err, "skipping route due to invalid externalCertificate configuration", "namespace", route.Namespace, "route", route.Name)
+					p.recorder.RecordRouteRejection(route, "ExternalCertificateValidationFailed", err.Error())
+					p.plugin.HandleRoute(watch.Deleted, route)
+					return err
+				}
 
-			// Update the tls.Certificate and tls.Key fields of the route with the data from the referenced secret.
-			route.Spec.TLS.Certificate = string(secret.Data["tls.crt"])
-			route.Spec.TLS.Key = string(secret.Data["tls.key"])
+				// read referenced secret
+				secret, err := p.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
+				if err != nil {
+					log.Error(err, "failed to get referenced secret")
+					return err
+				}
+
+				// Update the tls.Certificate and tls.Key fields of the route with the data from the referenced secret.
+				route.Spec.TLS.Certificate = string(secret.Data["tls.crt"])
+				route.Spec.TLS.Key = string(secret.Data["tls.key"])
+			}
 
 		case newHasExt && !oldHadExt:
 			// New route has externalCertificate, old route did not
