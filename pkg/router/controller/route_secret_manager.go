@@ -224,40 +224,42 @@ func (p *RouteSecretManager) validateAndRegister(route *routev1.Route) error {
 }
 
 // generateSecretHandler creates ResourceEventHandlerFuncs to handle Add, Update, and Delete events on secrets.
-// AddFunc: Invoked when a new secret is added. It logs the addition of the secret.
+//
+// AddFunc: Invoked when a new secret is added. It logs the addition of the secret. This function also handles the
+// re-creation scenario where a previously deleted secret is added again. In such cases, it revalidates the route's
+// external certificate configuration, updates the route's TLS certificate and key, and calls the next plugin's HandleRoute method with a watch.Modified event, and then commits the changes by calling the next plugin's Commit() method.
+//
 // UpdateFunc: Invoked when an existing secret is updated. It performs validation of the route's external certificate configuration.
-// If the validation fails, it records the route rejection, and triggers the deletion of the route by calling the HandleRoute method with a watch.Deleted event.
-// If the validation succeeds, it updates the route's TLS certificate and key with the new secret data and calls the next plugin's HandleRoute method with a watch.Modified event, and then the next plugin's Commit() method.
-// DeleteFunc: Invoked when the secret is deleted. It unregisters the associated route, records the route rejection, and triggers the deletion of the route by calling the HandleRoute method with a watch.Deleted event.
+// If the validation fails, it records the route rejection and triggers the deletion of the route by calling the HandleRoute method with a watch.Deleted event.
+// If the validation succeeds, it updates the route's TLS certificate and key with the new secret data and calls the next plugin's HandleRoute method with a watch.Modified event, and then commits the changes by calling the next plugin's Commit() method.
+//
+// DeleteFunc: Invoked when the secret is deleted. It logs the deletion, marks the secret as deleted for this route in the deletedSecrets map,
+// records the route rejection, and triggers the deletion of the route by calling the HandleRoute method with a watch.Deleted event. NOTE: It doesn't unregister the route.
 func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.ResourceEventHandlerFuncs {
 	// secret handler
 	return cache.ResourceEventHandlerFuncs{
 
-		// AddFunc is intentionally left empty (only logs the event) because this handler is generated only after ensuring the existence of the secret.
-		// By leaving this empty, we prevent unnecessary triggering for the addition of the secret again. Additionally, GetSecret() method is called
-		// immediately after registering with the secretManager, to read the secret from the cache.
 		AddFunc: func(obj interface{}) {
 			secret := obj.(*kapi.Secret)
 			log.V(4).Info("secret added for route", "namespace", route.Namespace, "secret", secret.Name, "route", route.Name)
 
 			// Secret re-creation scenario
-
-			// Check if the route key exists in the deletedSecrets map i.e check if the secret was deleted previously for this route.
-			// If it exists, it means the secret is being recreated. Remove the key from the map and proceed with re-registration. Else no-op (new secret creation).
-			// this helps to differentiate between a new secret creation and a recreation of a previously deleted secret.
-			key := generateKey(route.Namespace, route.Name)
+			// Check if the route key exists in the deletedSecrets map, indicating that the secret was previously deleted for this route.
+			// If it exists, it means the secret is being recreated. Remove the key from the map and proceed with re-registration.
+			// Otherwise, no-op (new secret creation scenario and no race condition with that flow)
+			// This helps to differentiate between a new secret creation and a re-creation of a previously deleted secret.
+			key := generateKey(route)
 			if _, deleted := p.deletedSecrets.LoadAndDelete(key); deleted {
 				log.V(4).Info("secret recreated for route", "namespace", route.Namespace, "secret", secret.Name, "route", route.Name)
 
 				// re-validate
-				// since secret re-creation will not trigger apiserver route admission,
-				// we need to rely on router controller for this validation.
+				// since secret re-creation will not trigger the apiserver route admission,
+				// we need to rely on the router controller for this validation.
 				fldPath := field.NewPath("spec").Child("tls").Child("externalCertificate")
 				if err := routeapihelpers.ValidateTLSExternalCertificate(route, fldPath, p.sarClient, p.secretsGetter).ToAggregate(); err != nil {
 					log.Error(err, "skipping route due to invalid externalCertificate configuration", "namespace", route.Namespace, "route", route.Name)
 					p.recorder.RecordRouteRejection(route, "ExternalCertificateValidationFailed", err.Error())
-					// route should be already deleted in this case
-					// p.plugin.HandleRoute(watch.Deleted, route)
+					p.plugin.HandleRoute(watch.Deleted, route)
 					return
 				}
 
@@ -266,8 +268,7 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 				if err != nil {
 					log.Error(err, "failed to get referenced secret")
 					p.recorder.RecordRouteRejection(route, "ExternalCertificateGetFailed", err.Error())
-					// route should be already deleted in this case
-					// p.plugin.HandleRoute(watch.Deleted, route)
+					p.plugin.HandleRoute(watch.Deleted, route)
 					return
 				}
 
@@ -317,7 +318,7 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 
 		DeleteFunc: func(obj interface{}) {
 			secret := obj.(*kapi.Secret)
-			key := generateKey(route.Namespace, route.Name)
+			key := generateKey(route)
 			msg := fmt.Sprintf("secret %s deleted for route %s", secret.Name, key)
 			log.V(4).Info(msg)
 
@@ -330,6 +331,8 @@ func (p *RouteSecretManager) generateSecretHandler(route *routev1.Route) cache.R
 	}
 }
 
+// unregister removes the route's registration with the secret manager and ensures
+// that any references to the deletedSecrets are cleaned up.
 func (p *RouteSecretManager) unregister(route *routev1.Route) error {
 	// unregister associated secret monitor
 	if err := p.secretManager.UnregisterRoute(route.Namespace, route.Name); err != nil {
@@ -338,16 +341,17 @@ func (p *RouteSecretManager) unregister(route *routev1.Route) error {
 	}
 	// clean the route if present inside deletedSecrets
 	// this is required for the scenario when the associated secret is deleted, before unregistering with secretManager
-	p.deletedSecrets.Delete(generateKey(route.Namespace, route.Name))
+	p.deletedSecrets.Delete(generateKey(route))
 	return nil
 }
 
+// hasExternalCertificate checks whether the given route has an externalCertificate specified.
 func hasExternalCertificate(route *routev1.Route) bool {
 	tls := route.Spec.TLS
 	return tls != nil && tls.ExternalCertificate != nil && len(tls.ExternalCertificate.Name) > 0
 }
 
 // generateKey creates a unique identifier for a route
-func generateKey(namespace, route string) string {
-	return fmt.Sprintf("%s/%s", namespace, route)
+func generateKey(route *routev1.Route) string {
+	return fmt.Sprintf("%s/%s", route.Namespace, route.Name)
 }
