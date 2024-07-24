@@ -341,7 +341,7 @@ func TestRouteSecretManager(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
-				IsRegistered: false,
+				IsPresent: false,
 			},
 			allow:     false,
 			eventType: watch.Modified,
@@ -384,7 +384,7 @@ func TestRouteSecretManager(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
-				IsRegistered: false,
+				IsPresent: false,
 			},
 			allow:     true,
 			eventType: watch.Modified,
@@ -427,7 +427,7 @@ func TestRouteSecretManager(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
-				IsRegistered: false,
+				IsPresent: false,
 			},
 			allow:     true,
 			eventType: watch.Modified,
@@ -470,8 +470,8 @@ func TestRouteSecretManager(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
-				IsRegistered: false,
-				Err:          fmt.Errorf("something"),
+				IsPresent: false,
+				Err:       fmt.Errorf("something"),
 			},
 			allow:         true,
 			eventType:     watch.Modified,
@@ -497,7 +497,7 @@ func TestRouteSecretManager(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
-				IsRegistered: false,
+				IsPresent: false,
 			},
 			allow:     true,
 			eventType: watch.Modified,
@@ -520,6 +520,8 @@ func TestRouteSecretManager(t *testing.T) {
 		},
 
 		// scenarios when route is updated (old route with externalCertificate, new route with externalCertificate)
+		// TODO: ^^ same secret name
+		// TODO: add test for different secret name
 		{
 			name: "route updated: old route with externalCertificate, new route with externalCertificate denied",
 			route: &routev1.Route{
@@ -540,7 +542,8 @@ func TestRouteSecretManager(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
-				IsRegistered: true,
+				IsPresent:  true,
+				SecretName: "tls-secret",
 			},
 			allow:     false,
 			eventType: watch.Modified,
@@ -583,7 +586,8 @@ func TestRouteSecretManager(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
-				IsRegistered: true,
+				IsPresent:  true,
+				SecretName: "tls-secret",
 			},
 			allow:     true,
 			eventType: watch.Modified,
@@ -626,7 +630,8 @@ func TestRouteSecretManager(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
-				IsRegistered: true,
+				IsPresent:  true,
+				SecretName: "tls-secret",
 			},
 			allow:     true,
 			eventType: watch.Modified,
@@ -669,8 +674,9 @@ func TestRouteSecretManager(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
-				IsRegistered: true,
-				Err:          fmt.Errorf("something"),
+				IsPresent:  true,
+				SecretName: "tls-secret",
+				Err:        fmt.Errorf("something"),
 			},
 			allow:         true,
 			eventType:     watch.Modified,
@@ -696,7 +702,8 @@ func TestRouteSecretManager(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
-				IsRegistered: true,
+				IsPresent:  true,
+				SecretName: "tls-secret",
 			},
 			allow:     true,
 			eventType: watch.Modified,
@@ -729,8 +736,9 @@ func TestRouteSecretManager(t *testing.T) {
 				Spec: routev1.RouteSpec{},
 			},
 			secretManager: fake.SecretManager{
-				IsRegistered: true,
-				Err:          fmt.Errorf("something"),
+				IsPresent:  true,
+				SecretName: "tls-secret",
+				Err:        fmt.Errorf("something"),
 			},
 			eventType:     watch.Modified,
 			expectedError: true,
@@ -745,7 +753,8 @@ func TestRouteSecretManager(t *testing.T) {
 				Spec: routev1.RouteSpec{},
 			},
 			secretManager: fake.SecretManager{
-				IsRegistered: true,
+				IsPresent:  true,
+				SecretName: "tls-secret",
 			},
 			eventType: watch.Modified,
 			expectedRoute: &routev1.Route{
@@ -769,7 +778,7 @@ func TestRouteSecretManager(t *testing.T) {
 				Spec: routev1.RouteSpec{},
 			},
 			secretManager: fake.SecretManager{
-				IsRegistered: false,
+				IsPresent: false,
 			},
 			eventType: watch.Modified,
 			expectedRoute: &routev1.Route{
@@ -792,7 +801,7 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 				Spec: routev1.RouteSpec{},
 			},
-			secretManager: fake.SecretManager{IsRegistered: false},
+			secretManager: fake.SecretManager{IsPresent: false},
 			eventType:     watch.Deleted,
 			expectedRoute: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
@@ -818,8 +827,11 @@ func TestRouteSecretManager(t *testing.T) {
 					},
 				},
 			},
-			secretManager: fake.SecretManager{IsRegistered: true},
-			eventType:     watch.Deleted,
+			secretManager: fake.SecretManager{
+				IsPresent:  true,
+				SecretName: "tls-secret",
+			},
+			eventType: watch.Deleted,
 			expectedRoute: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "route-test",
@@ -850,7 +862,11 @@ func TestRouteSecretManager(t *testing.T) {
 					},
 				},
 			},
-			secretManager: fake.SecretManager{IsRegistered: true, Err: fmt.Errorf("something")},
+			secretManager: fake.SecretManager{
+				IsPresent:  true,
+				SecretName: "tls-secret",
+				Err:        fmt.Errorf("something"),
+			},
 			eventType:     watch.Deleted,
 			expectedError: true,
 		},
@@ -880,6 +896,9 @@ func TestRouteSecretManager(t *testing.T) {
 			if !reflect.DeepEqual(s.expectedRejections, recorder.rejections) {
 				t.Fatalf("expected rejections %v, but got %v", s.expectedRejections, recorder.rejections)
 			}
+			if _, exists := rsm.deletedSecrets.Load(generateKey(s.route)); exists {
+				t.Fatalf("deletedSecrets must be cleaned")
+			}
 		})
 	}
 }
@@ -887,14 +906,15 @@ func TestRouteSecretManager(t *testing.T) {
 func TestSecretUpdateAndDelete(t *testing.T) {
 
 	scenarios := []struct {
-		name               string
-		route              *routev1.Route
-		secretManager      fake.SecretManager
-		allow              bool
-		deleteSecret       bool
-		expectedRoute      *routev1.Route
-		expectedEventType  watch.EventType
-		expectedRejections map[string]string
+		name                   string
+		route                  *routev1.Route
+		secretManager          fake.SecretManager
+		allow                  bool
+		deleteSecret           bool
+		expectedRoute          *routev1.Route
+		expectedEventType      watch.EventType
+		expectedRejections     map[string]string
+		expectedDeletedSecrets any
 	}{
 		{
 			name: "secret updated but permission revoked",
@@ -916,6 +936,8 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
+				IsPresent:  true,
+				SecretName: "tls-secret",
 			},
 			allow: false,
 			expectedRoute: &routev1.Route{
@@ -956,7 +978,9 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
-				Err: fmt.Errorf("something"),
+				IsPresent:  true,
+				SecretName: "tls-secret",
+				Err:        fmt.Errorf("something"),
 			},
 			allow: true,
 			expectedRoute: &routev1.Route{
@@ -997,6 +1021,8 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
+				IsPresent:  true,
+				SecretName: "tls-secret",
 			},
 			allow: true,
 			expectedRoute: &routev1.Route{
@@ -1018,7 +1044,7 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 			expectedRejections: map[string]string{},
 		},
 		{
-			name: "secret deleted but got error from secretManager",
+			name: "secret deleted and route successfully stored into deletedSecrets",
 			route: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "route-test",
@@ -1037,7 +1063,8 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 					"tls.crt": []byte("my-crt"),
 					"tls.key": []byte("my-key"),
 				}),
-				Err: fmt.Errorf("something"),
+				IsPresent:  true,
+				SecretName: "tls-secret",
 			},
 			deleteSecret: true,
 			expectedRoute: &routev1.Route{
@@ -1057,46 +1084,7 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 			expectedRejections: map[string]string{
 				"sandbox-route-test": "ExternalCertificateSecretDeleted",
 			},
-		},
-		{
-			name: "secret deleted and route successfully unregistered",
-			route: &routev1.Route{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "route-test",
-					Namespace: "sandbox",
-				},
-				Spec: routev1.RouteSpec{
-					TLS: &routev1.TLSConfig{
-						ExternalCertificate: &routev1.LocalObjectReference{
-							Name: "tls-secret",
-						},
-					},
-				},
-			},
-			secretManager: fake.SecretManager{
-				Secret: fakeSecret("sandbox", "tls-secret", corev1.SecretTypeTLS, map[string][]byte{
-					"tls.crt": []byte("my-crt"),
-					"tls.key": []byte("my-key"),
-				}),
-			},
-			deleteSecret: true,
-			expectedRoute: &routev1.Route{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "route-test",
-					Namespace: "sandbox",
-				},
-				Spec: routev1.RouteSpec{
-					TLS: &routev1.TLSConfig{
-						ExternalCertificate: &routev1.LocalObjectReference{
-							Name: "tls-secret",
-						},
-					},
-				},
-			},
-			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateSecretDeleted",
-			},
+			expectedDeletedSecrets: true,
 		},
 	}
 
@@ -1146,6 +1134,14 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 			if !reflect.DeepEqual(s.expectedRejections, recorder.rejections) {
 				t.Fatalf("expected rejections %v, but got %v", s.expectedRejections, recorder.rejections)
 			}
+
+			if val, _ := rsm.deletedSecrets.Load(generateKey(s.route)); !reflect.DeepEqual(val, s.expectedDeletedSecrets) {
+				t.Fatalf("expected deletedSecrets %v, but got %v", s.expectedDeletedSecrets, val)
+			}
 		})
 	}
+}
+
+func TestSecretRecreation(t *testing.T) {
+	// TODO
 }
