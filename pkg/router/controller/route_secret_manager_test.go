@@ -103,6 +103,26 @@ func (p *fakePluginDone) Commit() error {
 
 var _ router.Plugin = &fakePluginDone{}
 
+type statusRecorder struct {
+	rejections                 []string
+	unservableInFutureVersions map[string]string
+}
+
+func (r *statusRecorder) rejectionKey(route *routev1.Route) string {
+	return route.Namespace + "-" + route.Name
+}
+func (r *statusRecorder) RecordRouteRejection(route *routev1.Route, reason, message string) {
+	r.rejections = append(r.rejections, fmt.Sprintf("%s:%s", r.rejectionKey(route), reason))
+}
+func (r *statusRecorder) RecordRouteUnservableInFutureVersionsClear(route *routev1.Route) {
+	delete(r.unservableInFutureVersions, r.rejectionKey(route))
+}
+func (r *statusRecorder) RecordRouteUnservableInFutureVersions(route *routev1.Route, reason, message string) {
+	r.unservableInFutureVersions[r.rejectionKey(route)] = reason
+}
+
+var _ RouteStatusRecorder = &statusRecorder{}
+
 func TestRouteSecretManager(t *testing.T) {
 
 	scenarios := []struct {
@@ -113,7 +133,7 @@ func TestRouteSecretManager(t *testing.T) {
 		allow              bool
 		expectedRoute      *routev1.Route
 		expectedEventType  watch.EventType
-		expectedRejections map[string]string
+		expectedRejections []string
 		expectedError      bool
 	}{
 		// scenarios when route is added
@@ -151,8 +171,8 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateValidationFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
 			},
 			expectedError: true,
 		},
@@ -190,8 +210,8 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateValidationFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
 			},
 			expectedError: true,
 		},
@@ -229,8 +249,8 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateValidationFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
 			},
 			expectedError: true,
 		},
@@ -359,8 +379,8 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateValidationFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
 			},
 			expectedError: true,
 		},
@@ -402,8 +422,8 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateValidationFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
 			},
 			expectedError: true,
 		},
@@ -445,8 +465,8 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateValidationFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
 			},
 			expectedError: true,
 		},
@@ -561,8 +581,8 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateValidationFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
 			},
 			expectedError: true,
 		},
@@ -605,8 +625,8 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateValidationFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
 			},
 			expectedError: true,
 		},
@@ -649,8 +669,8 @@ func TestRouteSecretManager(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateValidationFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
 			},
 			expectedError: true,
 		},
@@ -875,12 +895,7 @@ func TestRouteSecretManager(t *testing.T) {
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
 			p := &fakePlugin{}
-			recorder := routeStatusRecorder{rejections: make(map[string]string)}
-
-			// assign default value to expectedRejections
-			if s.expectedRejections == nil {
-				s.expectedRejections = map[string]string{}
-			}
+			recorder := &statusRecorder{}
 			rsm := NewRouteSecretManager(p, recorder, &s.secretManager, &testSecretGetter{namespace: s.route.Namespace, secret: s.secretManager.Secret}, &testSARCreator{allow: s.allow})
 
 			gotErr := rsm.HandleRoute(s.eventType, s.route)
@@ -913,7 +928,7 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 		deleteSecret           bool
 		expectedRoute          *routev1.Route
 		expectedEventType      watch.EventType
-		expectedRejections     map[string]string
+		expectedRejections     []string
 		expectedDeletedSecrets any
 	}{
 		{
@@ -954,8 +969,8 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateValidationFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
 			},
 		},
 		{
@@ -997,8 +1012,8 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateGetFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateGetFailed",
 			},
 		},
 		{
@@ -1040,8 +1055,7 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 					},
 				},
 			},
-			expectedEventType:  watch.Modified,
-			expectedRejections: map[string]string{},
+			expectedEventType: watch.Modified,
 		},
 		{
 			name: "secret deleted and route successfully stored into deletedSecrets",
@@ -1081,8 +1095,8 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateSecretDeleted",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateSecretDeleted",
 			},
 			expectedDeletedSecrets: true,
 		},
@@ -1103,7 +1117,7 @@ func TestSecretUpdateAndDelete(t *testing.T) {
 			p := &fakePluginDone{
 				doneCh: make(chan struct{}),
 			}
-			recorder := routeStatusRecorder{rejections: make(map[string]string)}
+			recorder := &statusRecorder{}
 			rsm := NewRouteSecretManager(p, recorder, &s.secretManager, &testSecretGetter{namespace: s.route.Namespace, secret: oldSecret}, &testSARCreator{allow: s.allow})
 
 			if _, err := informer.AddEventHandler(rsm.generateSecretHandler(s.route)); err != nil {
@@ -1150,7 +1164,7 @@ func TestSecretRecreation(t *testing.T) {
 		allow              bool
 		expectedRoute      *routev1.Route
 		expectedEventType  watch.EventType
-		expectedRejections map[string]string
+		expectedRejections []string
 	}{
 		{
 			name: "secret deleted and recreated with permission revoked",
@@ -1190,8 +1204,9 @@ func TestSecretRecreation(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateValidationFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateSecretDeleted",
+				"sandbox-route-test:ExternalCertificateValidationFailed",
 			},
 		},
 		{
@@ -1233,8 +1248,9 @@ func TestSecretRecreation(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Deleted,
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateGetFailed",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateSecretDeleted",
+				"sandbox-route-test:ExternalCertificateGetFailed",
 			},
 		},
 		{
@@ -1277,9 +1293,8 @@ func TestSecretRecreation(t *testing.T) {
 				},
 			},
 			expectedEventType: watch.Modified,
-			// FIXME : This should be blank, but due to initial deletion, recreation is not cleaning previous status in the map.
-			expectedRejections: map[string]string{
-				"sandbox-route-test": "ExternalCertificateSecretDeleted",
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateSecretDeleted",
 			},
 		},
 	}
@@ -1299,7 +1314,7 @@ func TestSecretRecreation(t *testing.T) {
 			nextPlugin := &fakePluginDone{
 				doneCh: make(chan struct{}),
 			}
-			recorder := routeStatusRecorder{rejections: make(map[string]string)}
+			recorder := &statusRecorder{}
 			rsm := NewRouteSecretManager(nextPlugin, recorder, &s.secretManager, &testSecretGetter{namespace: s.route.Namespace, secret: oldSecret}, &testSARCreator{allow: s.allow})
 
 			if _, err := informer.AddEventHandler(rsm.generateSecretHandler(s.route)); err != nil {
