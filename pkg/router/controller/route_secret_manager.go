@@ -134,16 +134,10 @@ func (p *RouteSecretManager) HandleRoute(eventType watch.EventType, route *route
 				if err := p.validate(route); err != nil {
 					return err
 				}
-				// read referenced secret
-				secret, err := p.secretManager.GetSecret(context.TODO(), route.Namespace, route.Name)
-				if err != nil {
-					log.Error(err, "failed to get referenced secret")
+				// read referenced secret and update TLS certificate and key
+				if err := p.populateRouteTLSFromSecret(route); err != nil {
 					return err
 				}
-
-				// Update the tls.Certificate and tls.Key fields of the route with the data from the referenced secret.
-				route.Spec.TLS.Certificate = string(secret.Data["tls.crt"])
-				route.Spec.TLS.Key = string(secret.Data["tls.key"])
 			}
 
 		case newHasExt && !oldHadExt:
