@@ -696,8 +696,25 @@ func TestRouteSecretManager(t *testing.T) {
 				SecretName: "tls-secret",
 				Err:        fmt.Errorf("something"),
 			},
-			allow:         true,
-			eventType:     watch.Modified,
+			allow:     true,
+			eventType: watch.Modified,
+			expectedRoute: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "tls-secret",
+						},
+					},
+				},
+			},
+			expectedEventType: watch.Deleted,
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateGetFailed",
+			},
 			expectedError: true,
 		},
 		{
