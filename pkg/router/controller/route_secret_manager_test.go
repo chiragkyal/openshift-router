@@ -539,11 +539,9 @@ func TestRouteSecretManager(t *testing.T) {
 			expectedEventType: watch.Modified,
 		},
 
-		// scenarios when route is updated (old route with externalCertificate, new route with externalCertificate)
-		// TODO: ^^ same secret name
-		// TODO: add test for different secret name
+		// scenarios when route is updated (old route with externalCertificate, new route with same externalCertificate)
 		{
-			name: "route updated: old route with externalCertificate, new route with externalCertificate denied",
+			name: "route updated: old route with externalCertificate, new route with same externalCertificate denied",
 			route: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "route-test",
@@ -587,7 +585,7 @@ func TestRouteSecretManager(t *testing.T) {
 			expectedError: true,
 		},
 		{
-			name: "route updated: old route with externalCertificate, new route with externalCertificate allowed but secret not found",
+			name: "route updated: old route with externalCertificate, new route with same externalCertificate allowed but secret not found",
 			route: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "route-test",
@@ -631,7 +629,7 @@ func TestRouteSecretManager(t *testing.T) {
 			expectedError: true,
 		},
 		{
-			name: "route updated: old route with externalCertificate, new route with externalCertificate allowed but secret of incorrect type",
+			name: "route updated: old route with externalCertificate, new route with same externalCertificate allowed but secret of incorrect type",
 			route: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "route-test",
@@ -675,7 +673,7 @@ func TestRouteSecretManager(t *testing.T) {
 			expectedError: true,
 		},
 		{
-			name: "route updated: old route with externalCertificate, new route with externalCertificate allowed and correct secret but got error from secretManager",
+			name: "route updated: old route with externalCertificate, new route with same externalCertificate allowed and correct secret but got error from secretManager",
 			route: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "route-test",
@@ -703,7 +701,7 @@ func TestRouteSecretManager(t *testing.T) {
 			expectedError: true,
 		},
 		{
-			name: "route updated: old route with externalCertificate, new route with externalCertificate allowed and correct secret",
+			name: "route updated: old route with externalCertificate, new route with same externalCertificate allowed and correct secret",
 			route: &routev1.Route{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "route-test",
@@ -736,6 +734,210 @@ func TestRouteSecretManager(t *testing.T) {
 					TLS: &routev1.TLSConfig{
 						ExternalCertificate: &routev1.LocalObjectReference{
 							Name: "tls-secret",
+						},
+						Certificate: "my-crt",
+						Key:         "my-key",
+					},
+				},
+			},
+			expectedEventType: watch.Modified,
+		},
+
+		// scenarios when route is updated (old route with externalCertificate, new route with different externalCertificate)
+		{
+			name: "route updated: old route with externalCertificate, new route with different externalCertificate denied",
+			route: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "different-tls-secret",
+						},
+					},
+				},
+			},
+			secretManager: fake.SecretManager{
+				Secret: fakeSecret("sandbox", "different-tls-secret", corev1.SecretTypeTLS, map[string][]byte{
+					"tls.crt": []byte("my-crt"),
+					"tls.key": []byte("my-key"),
+				}),
+				IsPresent:  true,
+				SecretName: "tls-secret", // Used by LookupRouteSecret() to get the old secretName
+			},
+			allow:     false,
+			eventType: watch.Modified,
+			expectedRoute: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "different-tls-secret",
+						},
+					},
+				},
+			},
+			expectedEventType: watch.Deleted,
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
+			},
+			expectedError: true,
+		},
+		{
+			name: "route updated: old route with externalCertificate, new route with different externalCertificate allowed but secret not found",
+			route: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "different-tls-secret",
+						},
+					},
+				},
+			},
+			secretManager: fake.SecretManager{
+				Secret: fakeSecret("other-sandbox", "different-tls-secret", corev1.SecretTypeTLS, map[string][]byte{
+					"tls.crt": []byte("my-crt"),
+					"tls.key": []byte("my-key"),
+				}),
+				IsPresent:  true,
+				SecretName: "tls-secret", // Used by LookupRouteSecret() to get the old secretName
+			},
+			allow:     true,
+			eventType: watch.Modified,
+			expectedRoute: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "different-tls-secret",
+						},
+					},
+				},
+			},
+			expectedEventType: watch.Deleted,
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
+			},
+			expectedError: true,
+		},
+		{
+			name: "route updated: old route with externalCertificate, new route with different externalCertificate allowed but secret of incorrect type",
+			route: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "different-tls-secret",
+						},
+					},
+				},
+			},
+			secretManager: fake.SecretManager{
+				Secret: fakeSecret("sandbox", "different-tls-secret", corev1.SecretTypeBasicAuth, map[string][]byte{
+					"tls.crt": []byte("my-crt"),
+					"tls.key": []byte("my-key"),
+				}),
+				IsPresent:  true,
+				SecretName: "tls-secret", // Used by LookupRouteSecret() to get the old secretName
+			},
+			allow:     true,
+			eventType: watch.Modified,
+			expectedRoute: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "different-tls-secret",
+						},
+					},
+				},
+			},
+			expectedEventType: watch.Deleted,
+			expectedRejections: []string{
+				"sandbox-route-test:ExternalCertificateValidationFailed",
+			},
+			expectedError: true,
+		},
+		{
+			name: "route updated: old route with externalCertificate, new route with different externalCertificate allowed and correct secret but got error from secretManager",
+			route: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "different-tls-secret",
+						},
+					},
+				},
+			},
+			secretManager: fake.SecretManager{
+				Secret: fakeSecret("sandbox", "different-tls-secret", corev1.SecretTypeTLS, map[string][]byte{
+					"tls.crt": []byte("my-crt"),
+					"tls.key": []byte("my-key"),
+				}),
+				IsPresent:  true,
+				SecretName: "tls-secret", // Used by LookupRouteSecret() to get the old secretName
+				Err:        fmt.Errorf("something"),
+			},
+			allow:         true,
+			eventType:     watch.Modified,
+			expectedError: true,
+		},
+		{
+			name: "route updated: old route with externalCertificate, new route with different externalCertificate allowed and correct secret",
+			route: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "different-tls-secret",
+						},
+					},
+				},
+			},
+			secretManager: fake.SecretManager{
+				Secret: fakeSecret("sandbox", "different-tls-secret", corev1.SecretTypeTLS, map[string][]byte{
+					"tls.crt": []byte("my-crt"),
+					"tls.key": []byte("my-key"),
+				}),
+				IsPresent:  true,
+				SecretName: "tls-secret", // Used by LookupRouteSecret() to get the old secretName
+			},
+			allow:     true,
+			eventType: watch.Modified,
+			expectedRoute: &routev1.Route{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "route-test",
+					Namespace: "sandbox",
+				},
+				Spec: routev1.RouteSpec{
+					TLS: &routev1.TLSConfig{
+						ExternalCertificate: &routev1.LocalObjectReference{
+							Name: "different-tls-secret",
 						},
 						Certificate: "my-crt",
 						Key:         "my-key",
