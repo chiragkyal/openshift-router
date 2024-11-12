@@ -285,9 +285,9 @@ func (p *RouteSecretManager) generateSecretHandler(namespace, routeName string) 
 				return
 			}
 
-			// Until the route is re-evaluated by all the plugins (including this plugin),
-			// it should be marked as rejected. Once passes, the route will become active again.
-			p.recorder.RecordRouteRejection(route, "ExternalCertificateSecretUpdated", msg)
+			// Update the route status, keeping `Admitted=True`, to signal route update
+			// and re-evaluatation by all the plugins (including this plugin).
+			p.recorder.RecordRouteUpdate(route, "ExternalCertificateSecretUpdated", msg)
 		},
 
 		DeleteFunc: func(obj interface{}) {

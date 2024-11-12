@@ -105,22 +105,29 @@ var _ router.Plugin = &fakePluginDone{}
 
 type statusRecorder struct {
 	rejections                 []string
+	updates                    []string
 	unservableInFutureVersions map[string]string
 	doneCh                     chan struct{}
 }
 
-func (r *statusRecorder) rejectionKey(route *routev1.Route) string {
+func (r *statusRecorder) routeKey(route *routev1.Route) string {
 	return route.Namespace + "-" + route.Name
 }
 func (r *statusRecorder) RecordRouteRejection(route *routev1.Route, reason, message string) {
 	defer close(r.doneCh)
-	r.rejections = append(r.rejections, fmt.Sprintf("%s:%s", r.rejectionKey(route), reason))
+	r.rejections = append(r.rejections, fmt.Sprintf("%s:%s", r.routeKey(route), reason))
 }
+
+func (r *statusRecorder) RecordRouteUpdate(route *routev1.Route, reason, message string) {
+	defer close(r.doneCh)
+	r.updates = append(r.updates, fmt.Sprintf("%s:%s", r.routeKey(route), reason))
+}
+
 func (r *statusRecorder) RecordRouteUnservableInFutureVersionsClear(route *routev1.Route) {
-	delete(r.unservableInFutureVersions, r.rejectionKey(route))
+	delete(r.unservableInFutureVersions, r.routeKey(route))
 }
 func (r *statusRecorder) RecordRouteUnservableInFutureVersions(route *routev1.Route, reason, message string) {
-	r.unservableInFutureVersions[r.rejectionKey(route)] = reason
+	r.unservableInFutureVersions[r.routeKey(route)] = reason
 }
 
 var _ RouteStatusRecorder = &statusRecorder{}
@@ -1189,9 +1196,9 @@ func TestSecretUpdate(t *testing.T) {
 	// wait until route's status is updated
 	<-recorder.doneCh
 
-	expectedRejections := []string{"sandbox-route-test:ExternalCertificateSecretUpdated"}
-	if !reflect.DeepEqual(expectedRejections, recorder.rejections) {
-		t.Fatalf("expected rejections %v, but got %v", expectedRejections, recorder.rejections)
+	expectedUpdates := []string{"sandbox-route-test:ExternalCertificateSecretUpdated"}
+	if !reflect.DeepEqual(expectedUpdates, recorder.updates) {
+		t.Fatalf("expected rejections %v, but got %v", expectedUpdates, recorder.updates)
 	}
 	if _, exists := rsm.deletedSecrets.Load(generateKey(route.Namespace, route.Name)); exists {
 		t.Fatalf("expected deletedSecrets to not have %q key", generateKey(route.Namespace, route.Name))
