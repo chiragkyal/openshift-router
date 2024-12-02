@@ -795,6 +795,7 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 	var recorder controller.RouteStatusRecorder = controller.LogRejections
 	informer := factory.CreateRoutesSharedInformer()
 	routeLister := routelisters.NewRouteLister(informer.GetIndexer())
+	routeReSync := controller.NewRouteReSync()
 	if o.UpdateStatus {
 		lease := writerlease.New(time.Minute, 3*time.Second)
 		go lease.Run(stopCh)
@@ -812,12 +813,13 @@ func (o *TemplateRouterOptions) Run(stopCh <-chan struct{}) error {
 		plugin = controller.NewExtendedValidator(plugin, recorder)
 	}
 	if o.AllowExternalCertificates {
-		plugin = controller.NewRouteSecretManager(plugin, recorder, secretManager, kc.CoreV1(), routeLister, authorizationClient.SubjectAccessReviews())
+		plugin = controller.NewRouteSecretManager(plugin, recorder, secretManager, kc.CoreV1(), routeLister, routeReSync, authorizationClient.SubjectAccessReviews())
 	}
 	plugin = controller.NewUniqueHost(plugin, o.RouterSelection.DisableNamespaceOwnershipCheck, recorder)
 	plugin = controller.NewHostAdmitter(plugin, o.RouteAdmissionFunc(), o.AllowWildcardRoutes, o.RouterSelection.DisableNamespaceOwnershipCheck, recorder)
 
 	controller := factory.Create(plugin, false, stopCh)
+	routeReSync.UpdateRoot(controller)
 	controller.Run()
 
 	if blueprintPlugin != nil {

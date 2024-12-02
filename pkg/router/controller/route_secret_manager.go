@@ -27,6 +27,8 @@ type RouteSecretManager struct {
 	plugin router.Plugin
 	// recorder is an interface for indicating route status.
 	recorder RouteStatusRecorder
+	//
+	routeReSync RouteReSync
 
 	secretManager secretmanager.SecretManager
 	secretsGetter corev1client.SecretsGetter
@@ -47,6 +49,7 @@ func NewRouteSecretManager(
 	secretManager secretmanager.SecretManager,
 	secretsGetter corev1client.SecretsGetter,
 	routelister routelisters.RouteLister,
+	routeReSync RouteReSync,
 	sarClient authorizationclient.SubjectAccessReviewInterface,
 ) *RouteSecretManager {
 	return &RouteSecretManager{
@@ -55,6 +58,7 @@ func NewRouteSecretManager(
 		secretManager:  secretManager,
 		secretsGetter:  secretsGetter,
 		routelister:    routelister,
+		routeReSync:    routeReSync,
 		sarClient:      sarClient,
 		deletedSecrets: sync.Map{},
 	}
@@ -266,17 +270,14 @@ func (p *RouteSecretManager) generateSecretHandler(namespace, routeName string) 
 					return
 				}
 
-				// The route should *remain* rejected until it's re-evaluated
-				// by all the plugins (including this plugin). Once passes, the route will become active again.
-				msg := fmt.Sprintf("secret %q recreated for route %q", secret.Name, key)
-				p.recorder.RecordRouteRejection(route, "ExternalCertificateSecretRecreated", msg)
+				p.routeReSync.ReSync(watch.Modified, route)
 			}
 		},
 
 		UpdateFunc: func(old interface{}, new interface{}) {
 			secretOld := old.(*kapi.Secret)
 			secretNew := new.(*kapi.Secret)
-			key := generateKey(namespace, routeName)
+			// key := generateKey(namespace, routeName)
 			log.V(4).Info("Secret updated for route", "namespace", namespace, "secret", secretNew.Name, "oldSecretVersion", secretOld.ResourceVersion, "newSecretVersion", secretNew.ResourceVersion, "route", routeName)
 
 			// Ensure fetching the updated route
@@ -286,15 +287,7 @@ func (p *RouteSecretManager) generateSecretHandler(namespace, routeName string) 
 				return
 			}
 
-			msg := fmt.Sprintf("secret %q updated for route %q (oldSecretVersion=%v, newSecretVersion=%v)", secretNew.Name, key, secretOld.ResourceVersion, secretNew.ResourceVersion)
-			// Update the route status to notify plugins, including this plugin, for re-evaluation.
-			// - If the route is admitted (Admitted=True), record an update event.
-			// - If the route is not admitted, record a rejection event (keep it rejected).
-			if isRouteAdmittedTrue(route.DeepCopy()) {
-				p.recorder.RecordRouteUpdate(route, "ExternalCertificateSecretUpdated", msg)
-			} else {
-				p.recorder.RecordRouteRejection(route, "ExternalCertificateSecretUpdated", msg)
-			}
+			p.routeReSync.ReSync(watch.Modified, route)
 		},
 
 		DeleteFunc: func(obj interface{}) {
@@ -313,10 +306,7 @@ func (p *RouteSecretManager) generateSecretHandler(namespace, routeName string) 
 				return
 			}
 
-			// Reject this route
-			p.recorder.RecordRouteRejection(route, "ExternalCertificateSecretDeleted", msg)
-			// Stop serving this route
-			p.plugin.HandleRoute(watch.Deleted, route)
+			p.routeReSync.ReSync(watch.Modified, route)
 		},
 	}
 }
